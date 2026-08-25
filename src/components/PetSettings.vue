@@ -1095,7 +1095,7 @@ pushNotify('摸鱼一下~', 'wave')  // 动作可选：wave / jump / failed / wo
 }
 .s-gallery-refresh {
   flex: none;
-  min-width: 4.6em;
+  min-width: 8em;
   padding: 8px 6px;
   border: 1px solid var(--border-strong, #ddd);
   border-radius: var(--radius-sm, 8px);
