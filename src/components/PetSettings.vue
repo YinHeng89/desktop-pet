@@ -217,18 +217,22 @@ function onClose(): void {
   void closeSettingsWindow()
 }
 
-// 顶部 header 拖动窗口（Tauri v2 用 startDragging API，必须在 mousedown 内同步调用）。
-// 关闭按钮本身有 @click，这里跳过，避免拖动吞掉点击。
-function onHeaderMouseDown(e: MouseEvent): void {
+// 拖动窗口（Tauri v2 用 startDragging API，必须在 mousedown 内同步调用）。
+// 绑在 .settings-root 上，包含 header 与 root 的 padding 区域，使整页背景都可拖。
+// 跳过交互元素，避免拖动吞掉点击/拖动滑块等手势。
+function onRootMouseDown(e: MouseEvent): void {
   const target = e.target as HTMLElement
-  if (target.closest('.s-close')) return
+  // 仅响应主鼠标按键
+  if (e.button !== 0) return
+  // 命中以下交互元素则不启动窗口拖拽
+  if (target.closest('button, a, input, textarea, select, .s-slider, .s-card, .s-gallery-card')) return
   void startDragging()
 }
 </script>
 
 <template>
-  <div class="settings-root">
-    <div class="s-header" @mousedown="onHeaderMouseDown">
+  <div class="settings-root" @mousedown="onRootMouseDown">
+    <div class="s-header">
       <span class="s-title">PetBuddy 设置</span>
       <button class="s-close" @click="onClose">×</button>
     </div>
