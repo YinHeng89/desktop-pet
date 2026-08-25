@@ -873,7 +873,7 @@ function onRootMouseDown(e: MouseEvent): void {
 .s-char-count {
   position: absolute;
   right: 8px;
-  bottom: 6px;
+  bottom: 9px;
   font-size: 11px;
   color: var(--muted);
   pointer-events: none;
