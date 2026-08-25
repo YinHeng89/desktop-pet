@@ -3,7 +3,7 @@
 import { onMounted, ref, computed } from 'vue'
 import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, registerDownloadedPet, loadPetManifest, type PetDef } from '../store/pet'
 import { pushNotify } from '../store/notify'
-import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, type OnlinePetMeta } from '../tauri'
+import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, type OnlinePetMeta } from '../tauri'
 import SpritePet from './SpritePet.vue'
 
 // settings 窗口是独立 webview，pets 由 App.vue onMounted 异步加载；
@@ -329,7 +329,11 @@ function onHeaderMouseDown(e: MouseEvent): void {
           <div class="s-gallery-head-text">
             <span class="s-gallery-title">在线画廊</span>
             <span class="s-gallery-source">
-              数据来源：awesome-codex-pet（GitHub 开源仓库）· 预览图由 codexpet.top 提供
+              数据来源：
+              <a class="s-gallery-link" href="https://github.com/legeling/awesome-codex-pet" @click.prevent="openExternal('https://github.com/legeling/awesome-codex-pet')">awesome-codex-pet（GitHub 开源仓库）</a>
+              · 预览图由
+              <a class="s-gallery-link" href="https://codexpet.top" @click.prevent="openExternal('https://codexpet.top')">codexpet.top</a>
+              提供
             </span>
           </div>
           <button class="s-close" @click="closeGallery">×</button>
@@ -785,6 +789,15 @@ function onHeaderMouseDown(e: MouseEvent): void {
   font-size: 11px;
   color: var(--muted);
   line-height: 1.4;
+}
+.s-gallery-link {
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.s-gallery-link:hover {
+  color: var(--primary);
 }
 .s-gallery-body {
   flex: 1;

@@ -121,6 +121,21 @@ export async function openSettingsWindow(): Promise<void> {
   }
 }
 
+/** 用系统默认浏览器打开外部链接 */
+export async function openExternal(url: string): Promise<void> {
+  if (!isTauri) {
+    window.open(url, '_blank')
+    return
+  }
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('open_external', { url })
+  } catch (e) {
+    console.error('[tauri] openExternal failed', e)
+    window.open(url, '_blank')
+  }
+}
+
 /** 关闭（隐藏）设置窗口 */
 export async function closeSettingsWindow(): Promise<void> {
   if (!isTauri) return

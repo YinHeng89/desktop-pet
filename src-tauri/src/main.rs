@@ -15,6 +15,14 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0)
 }
 
+/// 用系统默认程序（浏览器）打开外部链接。
+#[tauri::command]
+fn open_external(url: String) {
+    if let Err(e) = open::that(&url) {
+        eprintln!("[open_external] 打开链接失败: {url}: {e}");
+    }
+}
+
 /// 控制 macOS Dock 图标是否显示。
 /// 打开设置窗口时设为 Regular（显示 Dock）；关闭设置窗口时设为 Accessory（隐藏 Dock）。
 /// 与宠物是否显示无关。仅在 macOS 主线程调用有效。
@@ -263,6 +271,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             quit_app,
+            open_external,
             set_autostart,
             get_autostart,
             broadcast_event,

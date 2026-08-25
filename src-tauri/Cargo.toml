@@ -17,6 +17,8 @@ serde_json = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # 在线画廊：拉取 awesome-codex-pet 索引与宠物包（纯 rustls，不依赖系统 TLS）
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# 外部链接：用系统默认程序打开（浏览器）
+open = "5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
