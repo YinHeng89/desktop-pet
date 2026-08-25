@@ -366,7 +366,7 @@ function onRootMouseDown(e: MouseEvent): void {
             <span class="s-gallery-title">在线画廊</span>
             <span class="s-gallery-source">
               数据来源：
-              <a class="s-gallery-link" href="https://github.com/legeling/awesome-codex-pet" @click.prevent="openExternal('https://github.com/legeling/awesome-codex-pet')">awesome-codex-pet（GitHub 开源仓库）</a>
+              <a class="s-gallery-link" href="https://github.com/legeling/awesome-codex-pet" @click.prevent="openExternal('https://github.com/legeling/awesome-codex-pet')">awesome-codex-pet</a>
               · 预览图由
               <a class="s-gallery-link" href="https://codexpet.top" @click.prevent="openExternal('https://codexpet.top')">codexpet.top</a>
               提供
@@ -1006,18 +1006,23 @@ pushNotify('摸鱼一下~', 'wave')  // 动作可选：wave / jump / failed / wo
 }
 .s-gallery-head-text {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
 }
 .s-gallery-title {
   font-size: 17px;
   font-weight: 700;
   color: var(--text);
+  white-space: nowrap;
 }
 .s-gallery-source {
   font-size: 11px;
   color: var(--muted);
   line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .s-gallery-link {
   color: var(--muted);
