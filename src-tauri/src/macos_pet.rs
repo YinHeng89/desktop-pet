@@ -23,13 +23,17 @@ static INTERACTIVE_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
 
 /// 前端调用：更新可交互区域列表。传空数组清空（整窗穿透）。
+/// 注意：空矩形说明前端尚未渲染出有效交互元素（如宠物尚未加载），
+/// 此时把 RECTS_INITIALIZED 置回 false，让 NSTimer 保持窗口可交互，
+/// 避免「已初始化但矩形为空」导致鼠标永久穿透。
 #[tauri::command]
 pub fn set_notify_interactive_rects(rects: Vec<(f64, f64, f64, f64)>) {
+    let non_empty = !rects.is_empty();
     if let Ok(mut g) = INTERACTIVE_RECTS.lock() {
         *g = rects;
     }
     if let Ok(mut init) = RECTS_INITIALIZED.lock() {
-        *init = true;
+        *init = non_empty;
     }
 }
 

@@ -157,12 +157,17 @@ function reportInteractiveRects(): void {
   const b = bubbleEl.value
   if (b) {
     const r = b.getBoundingClientRect()
-    rects.push([r.left, r.top, r.width, r.height])
+    // 过滤零尺寸矩形（元素尚未布局时宽高为 0，会导致命中判断恒假 → 穿透）
+    if (r.width > 0 && r.height > 0) {
+      rects.push([r.left, r.top, r.width, r.height])
+    }
   }
   const p = petStageEl.value
   if (p) {
     const r = p.getBoundingClientRect()
-    rects.push([r.left, r.top, r.width, r.height])
+    if (r.width > 0 && r.height > 0) {
+      rects.push([r.left, r.top, r.width, r.height])
+    }
   }
   void setNotifyInteractiveRects(rects)
 }
@@ -210,9 +215,11 @@ function onPetDblClick(): void {
   openPetPicker()
 }
 
-// 气泡/缩放/显隐变化时重新上报矩形
+// 气泡/宠物/缩放/显隐变化时重新上报矩形。
+// 关键：currentPet 异步加载完成后必须重新上报，否则矩形停留在空的初始值，
+// 导致命中判断失效（宠物区域无法交互）。
 watch(
-  () => [currentNotify.value?.id, chatText.value, petStore.scale, petStore.visible],
+  () => [currentNotify.value?.id, chatText.value, petStore.scale, petStore.visible, currentPet.value?.id],
   () => {
     setTimeout(reportInteractiveRects, 0)
   },
