@@ -433,8 +433,6 @@ function onRootMouseDown(e: MouseEvent): void {
   justify-content: space-between;
   margin-bottom: 14px;
   flex-shrink: 0;
-  /* 无边框窗口：header 通过 startDragging API 拖动（见 onHeaderMouseDown） */
-  cursor: move;
   user-select: none;
   -webkit-user-select: none;
 }
