@@ -838,20 +838,20 @@ function onHeaderMouseDown(e: MouseEvent): void {
   margin-top: -9px;
   padding: 0;
   border: none;
-  background: transparent;
+  border-radius: 50%;
+  background: rgba(31, 39, 51, 0.1);
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 18px;
   font-family: system-ui, sans-serif;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.5;
-  transition: opacity 0.15s ease, color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .s-gallery-clear:hover {
-  opacity: 0.9;
+  background: rgba(31, 39, 51, 0.2);
   color: var(--text);
 }
 .s-gallery-refresh {
