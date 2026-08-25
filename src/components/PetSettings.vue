@@ -109,6 +109,15 @@ const importError = ref('')
 function onPickFile(): void {
   fileInput.value?.click()
 }
+
+// ── 在线画廊 ──
+const galleryOpen = ref(false)
+function openGallery(): void {
+  galleryOpen.value = true
+}
+function closeGallery(): void {
+  galleryOpen.value = false
+}
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf)
   let binary = ''
@@ -224,15 +233,38 @@ function onClose(): void {
           </div>
         </div>
 
-        <button class="s-add" :disabled="importing" @click="onPickFile">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 5v14" />
-            <path d="M5 12h14" />
-          </svg>
-          <span>{{ importing ? '导入中…' : '添加宠物' }}</span>
-        </button>
+        <div class="s-add-row">
+          <button class="s-add" :disabled="importing" @click="onPickFile">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v14" />
+              <path d="M5 12h14" />
+            </svg>
+            <span>{{ importing ? '导入中…' : '本地导入' }}</span>
+          </button>
+          <button class="s-add s-add-online" :disabled="importing" @click="openGallery">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M3 12h18" />
+              <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18" />
+            </svg>
+            <span>在线画廊</span>
+          </button>
+        </div>
         <div v-if="importError" class="s-import-error">{{ importError }}</div>
         <input ref="fileInput" type="file" accept=".zip" style="display: none" @change="onFileChosen" />
+      </div>
+    </div>
+
+    <!-- 在线画廊弹窗（骨架，列表/下载逻辑后续接入） -->
+    <div v-if="galleryOpen" class="s-gallery-mask" @click.self="closeGallery">
+      <div class="s-gallery">
+        <div class="s-gallery-head">
+          <span class="s-gallery-title">在线画廊</span>
+          <button class="s-gallery-close" @click="closeGallery">✕</button>
+        </div>
+        <div class="s-gallery-body">
+          <div class="s-gallery-placeholder">画廊加载中…（接入 awesome-codex-pet 中）</div>
+        </div>
       </div>
     </div>
   </div>
@@ -537,13 +569,17 @@ function onClose(): void {
   color: var(--muted);
   line-height: 1.4;
 }
-.s-add {
+.s-add-row {
   margin-top: 12px;
+  display: flex;
+  gap: 8px;
+}
+.s-add {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  width: 100%;
   padding: 11px;
   border: 1.5px dashed var(--border-strong);
   border-radius: var(--radius-sm);
@@ -559,6 +595,16 @@ function onClose(): void {
   color: var(--primary);
   background: var(--primary-soft);
 }
+.s-add-online {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+.s-add-online:hover {
+  border-color: var(--primary);
+  color: #fff;
+  background: var(--primary);
+}
 .s-add:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -567,5 +613,58 @@ function onClose(): void {
   margin-top: 8px;
   font-size: 11px;
   color: var(--danger);
+}
+.s-gallery-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.s-gallery {
+  width: 86%;
+  max-width: 520px;
+  max-height: 80%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #fff);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+.s-gallery-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border, #eee);
+}
+.s-gallery-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.s-gallery-close {
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+}
+.s-gallery-close:hover {
+  color: var(--danger);
+}
+.s-gallery-body {
+  padding: 18px;
+  overflow-y: auto;
+}
+.s-gallery-placeholder {
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 40px 0;
 }
 </style>
