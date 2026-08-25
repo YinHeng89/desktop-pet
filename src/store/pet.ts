@@ -75,7 +75,11 @@ export const petStore = reactive<PetStore>({
 
 export const currentPet = computed<PetDef | null>(() => {
   if (!petStore.pets.length) return null
-  return petStore.pets.find((p) => p.id === petStore.currentId) || petStore.pets[0]
+  // 未记录选中 → 默认第一个；已记录选中 → 严格匹配该 id，
+  // 匹配不上（如选中的是外部宠物、列表尚未异步加载完）时返回 null，
+  // 避免首屏错误回退到第一个内置宠物，待列表补全后自动切到正确宠物。
+  if (!petStore.currentId) return petStore.pets[0]
+  return petStore.pets.find((p) => p.id === petStore.currentId) || null
 })
 
 /** 加载内置宠物清单 + 外部导入宠物 */
