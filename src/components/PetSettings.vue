@@ -813,6 +813,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
   position: relative;
   flex: 1;
   display: flex;
+  align-items: center;
 }
 .s-gallery-search-input {
   flex: 1;
@@ -820,6 +821,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
   border: 1px solid var(--border-strong, #ddd);
   border-radius: var(--radius-sm, 8px);
   font-size: 13px;
+  line-height: 1.4;
   outline: none;
   background: var(--panel, #fff);
   color: var(--text);
@@ -829,26 +831,27 @@ function onHeaderMouseDown(e: MouseEvent): void {
 }
 .s-gallery-clear {
   position: absolute;
-  right: 8px;
+  right: 9px;
   top: 50%;
-  transform: translateY(-50%);
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
+  margin-top: -9px;
   padding: 0;
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 15px;
-  line-height: 1;
+  font-size: 13px;
+  line-height: 18px;
+  font-family: system-ui, sans-serif;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.55;
+  opacity: 0.5;
   transition: opacity 0.15s ease, color 0.15s ease;
 }
 .s-gallery-clear:hover {
-  opacity: 1;
+  opacity: 0.9;
   color: var(--text);
 }
 .s-gallery-refresh {
