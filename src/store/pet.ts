@@ -88,7 +88,10 @@ export async function loadPetManifest(): Promise<void> {
     console.error('[petStore] 加载宠物 manifest 失败:', e)
   }
   await loadExternalPets()
-  if (!petStore.pets.some((p) => p.id === petStore.currentId)) {
+  // 仅当从未记录过选中（currentId 为空）时，默认选中第一个宠物。
+  // 若 currentId 有值（哪怕是上次关闭时选中的外部宠物，此刻外部列表尚未就绪），
+  // 则保留该值，等宠物列表补全后由 currentPet 自动生效，避免首屏闪现第一个宠物。
+  if (!petStore.currentId && petStore.pets.length) {
     petStore.currentId = petStore.pets[0]?.id || ''
   }
 }

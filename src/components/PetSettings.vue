@@ -3,15 +3,28 @@
 import { onMounted, ref, computed } from 'vue'
 import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, registerDownloadedPet, loadPetManifest, type PetDef } from '../store/pet'
 import { pushNotify } from '../store/notify'
-import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, preloadTauri, type OnlinePetMeta } from '../tauri'
+import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, preloadTauri, emitEvent, onEvent, isTauri, type OnlinePetMeta } from '../tauri'
 import SpritePet from './SpritePet.vue'
 
 // settings 窗口是独立 webview，pets 由 App.vue onMounted 异步加载；
 // 此处兜底：挂载时若尚未加载则主动加载，保证列表与预览始终有数据。
+// 同时主动从 main 窗口同步「当前选中的宠物」，避免首屏先闪第一个宠物。
 onMounted(() => {
   // settings 是独立 webview 窗口，必须在此预加载 windowApi，
   // 否则 startDragging 因 windowApi 为 null 而直接 return，窗口无法拖动。
   void preloadTauri()
+  // 监听 main 广播的宠物切换，实时同步当前选中（main 打开设置时会回复当前选中）。
+  if (isTauri) {
+    void onEvent('pet-switch', (payload) => {
+      const raw = String(payload)
+      const pureId = raw.startsWith('pet:') ? raw.slice(4) : raw
+      if (pureId && petStore.pets.some((p) => p.id === pureId)) {
+        petStore.currentId = pureId
+      }
+    })
+    // 向 main 请求当前选中的宠物（main 的 PetHost 收到后会 emit pet-switch 带当前 id）。
+    void emitEvent('request-current-pet', '')
+  }
   if (!petStore.pets.length) {
     void loadPetManifest()
   }
