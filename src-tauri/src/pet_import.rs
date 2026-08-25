@@ -496,7 +496,7 @@ struct RawOnlinePet {
     primary_category: String,
     #[serde(default)]
     description: String,
-    #[serde(default)]
+    #[serde(default, rename = "spriteVersionNumber")]
     sprite_version_number: u32,
 }
 
