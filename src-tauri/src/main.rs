@@ -92,15 +92,15 @@ fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
 /// 打开设置窗口（居中显示并聚焦；已存在则复用）。
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle) {
-    // 打开设置时显示 Dock 图标
-    #[cfg(target_os = "macos")]
-    set_dock_visible(true);
     if let Some(w) = app.get_webview_window("settings") {
         let _ = w.center();
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+    // 打开设置时显示 Dock 图标（放在 show 之后，即使切换失败也不影响窗口显示）
+    #[cfg(target_os = "macos")]
+    set_dock_visible(true);
 }
 
 /// 隐藏设置窗口（前端关闭按钮调用）。

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 宠物设置页（settings 窗口整页内容）。
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, computed } from 'vue'
 import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, registerDownloadedPet, loadPetManifest, type PetDef } from '../store/pet'
 import { pushNotify } from '../store/notify'
 import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, type OnlinePetMeta } from '../tauri'
@@ -398,7 +398,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
   justify-content: space-between;
   margin-bottom: 14px;
   flex-shrink: 0;
-  /* 无边框窗口：header 作为拖动区域（data-tauri-drag-region 由 Tauri v2 处理） */
+  /* 无边框窗口：header 通过 startDragging API 拖动（见 onHeaderMouseDown） */
   cursor: move;
   user-select: none;
   -webkit-user-select: none;
@@ -421,8 +421,6 @@ function onHeaderMouseDown(e: MouseEvent): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* 排除拖动区域：按钮可点击，不被 header 拖动捕获 */
-  -webkit-app-region: no-drag;
 }
 .s-close:hover {
   background: var(--danger-soft);
