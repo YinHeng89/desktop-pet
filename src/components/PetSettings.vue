@@ -889,8 +889,9 @@ pushNotify('摸鱼一下~', 'wave')  // 动作可选：wave / jump / failed / wo
   outline: none;
   background: var(--panel, #fff);
   color: var(--text);
-  resize: vertical;
+  resize: none;
   box-sizing: border-box;
+  -webkit-user-drag: none;
 }
 .s-modal-input:focus {
   border-color: var(--primary);
