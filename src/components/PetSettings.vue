@@ -332,7 +332,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
               数据来源：awesome-codex-pet（GitHub 开源仓库）· 预览图由 codexpet.top 提供
             </span>
           </div>
-          <button class="s-gallery-close" @click="closeGallery">✕</button>
+          <button class="s-close" @click="closeGallery">×</button>
         </div>
         <div class="s-gallery-search">
           <div class="s-gallery-search-wrap">
@@ -785,17 +785,6 @@ function onHeaderMouseDown(e: MouseEvent): void {
   font-size: 11px;
   color: var(--muted);
   line-height: 1.4;
-}
-.s-gallery-close {
-  border: none;
-  background: transparent;
-  font-size: 18px;
-  color: var(--muted);
-  cursor: pointer;
-  line-height: 1;
-}
-.s-gallery-close:hover {
-  color: var(--danger);
 }
 .s-gallery-body {
   flex: 1;
