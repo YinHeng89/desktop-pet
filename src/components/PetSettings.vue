@@ -346,8 +346,14 @@ function onHeaderMouseDown(e: MouseEvent): void {
               v-if="galleryKeyword"
               class="s-gallery-clear"
               title="清空搜索"
+              aria-label="清空搜索"
               @click="galleryKeyword = ''"
-            >✕</button>
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                <line x1="2" y1="2" x2="8" y2="8" />
+                <line x1="8" y1="2" x2="2" y2="8" />
+              </svg>
+            </button>
           </div>
           <button class="s-gallery-refresh" :disabled="galleryLoading" @click="loadGallery">
             {{ galleryLoading ? '加载中…' : '刷新' }}
@@ -841,9 +847,6 @@ function onHeaderMouseDown(e: MouseEvent): void {
   border-radius: 50%;
   background: rgba(31, 39, 51, 0.1);
   color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
-  font-family: system-ui, sans-serif;
   cursor: pointer;
   display: flex;
   align-items: center;
