@@ -426,16 +426,18 @@ function onRootMouseDown(e: MouseEvent): void {
         </div>
         <div class="s-modal-body">
           <label class="s-field-label">通知内容</label>
-          <textarea
-            v-model="notifyText"
-            class="s-modal-input"
-            rows="3"
-            maxlength="120"
-            placeholder="输入要显示的通知文字…"
-            @keydown.meta.enter="sendNotify"
-            @keydown.ctrl.enter="sendNotify"
-          />
-          <div class="s-char-count">{{ notifyText.length }}/120</div>
+          <div class="s-input-wrap">
+            <textarea
+              v-model="notifyText"
+              class="s-modal-input"
+              rows="3"
+              maxlength="120"
+              placeholder="输入要显示的通知文字…"
+              @keydown.meta.enter="sendNotify"
+              @keydown.ctrl.enter="sendNotify"
+            />
+            <div class="s-char-count">{{ notifyText.length }}/120</div>
+          </div>
 
           <div class="s-modal-tips">
             <div class="s-tips-title">调用教程</div>
@@ -849,7 +851,7 @@ function onRootMouseDown(e: MouseEvent): void {
 }
 .s-modal-input {
   width: 100%;
-  padding: 9px 11px;
+  padding: 9px 11px 22px;
   border: 1px solid var(--border-strong, #ddd);
   border-radius: var(--radius-sm, 8px);
   font-size: 13px;
@@ -865,11 +867,17 @@ function onRootMouseDown(e: MouseEvent): void {
 .s-modal-input:focus {
   border-color: var(--primary);
 }
+.s-input-wrap {
+  position: relative;
+}
 .s-char-count {
-  text-align: right;
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
   font-size: 11px;
   color: var(--muted);
-  margin: 4px 0 12px;
+  pointer-events: none;
+  user-select: none;
 }
 .s-modal-tips {
   margin-top: 16px;
