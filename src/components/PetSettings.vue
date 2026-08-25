@@ -110,6 +110,31 @@ function sendNotify(): void {
   closeNotifyModal()
 }
 
+// 复制 curl 命令
+const CURL_TEXT = `curl -X POST http://127.0.0.1:8756/notify \\
+  -H 'Content-Type: application/json' \\
+  -d '{"text":"下班啦！","action":"jump"}'`
+const curlCopied = ref(false)
+let curlCopiedTimer: ReturnType<typeof setTimeout> | null = null
+async function copyCurl(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(CURL_TEXT)
+  } catch {
+    // 剪贴板不可用时回退：用临时 textarea 复制
+    const ta = document.createElement('textarea')
+    ta.value = CURL_TEXT
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  }
+  curlCopied.value = true
+  if (curlCopiedTimer) clearTimeout(curlCopiedTimer)
+  curlCopiedTimer = setTimeout(() => {
+    curlCopied.value = false
+  }, 1500)
+}
+
 // ── 添加外部宠物 ──
 const fileInput = ref<HTMLInputElement | null>(null)
 const importing = ref(false)
@@ -439,12 +464,17 @@ function onRootMouseDown(e: MouseEvent): void {
             <div class="s-char-count">{{ notifyText.length }}/120</div>
           </div>
 
-          <div class="s-field-label">调用教程</div>
+          <div class="s-field-label s-tips-label">调用教程</div>
           <div class="s-modal-tips">
             <div class="s-tips-sub">HTTP 接口（任意外部程序，端口 8756）</div>
-            <pre class="s-code">curl -X POST http://127.0.0.1:8756/notify \
+            <div class="s-code-wrap">
+              <pre class="s-code">curl -X POST http://127.0.0.1:8756/notify \
   -H 'Content-Type: application/json' \
   -d '{"text":"下班啦！","action":"jump"}'</pre>
+              <button class="s-copy-btn" :class="{ copied: curlCopied }" @click="copyCurl">
+                {{ curlCopied ? '已复制' : '复制' }}
+              </button>
+            </div>
             <div class="s-tips-note">提示：宠物需处于「显示」状态才能看到气泡；双击气泡或最多显示 3 条后会自动消失。</div>
           </div>
         </div>
@@ -850,6 +880,9 @@ function onRootMouseDown(e: MouseEvent): void {
   color: var(--text);
   margin: 4px 0 6px;
 }
+.s-tips-label {
+  margin-top: 16px;
+}
 .s-modal-input {
   width: 100%;
   padding: 9px 11px 22px;
@@ -891,9 +924,12 @@ function onRootMouseDown(e: MouseEvent): void {
   color: var(--muted);
   margin: 0 0 4px;
 }
+.s-code-wrap {
+  position: relative;
+}
 .s-code {
   margin: 0;
-  padding: 8px 10px;
+  padding: 8px 52px 8px 10px;
   background: rgba(31, 39, 51, 0.06);
   border-radius: 6px;
   font-size: 11px;
@@ -902,6 +938,27 @@ function onRootMouseDown(e: MouseEvent): void {
   white-space: pre-wrap;
   word-break: break-all;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.s-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong, #ddd);
+  border-radius: 5px;
+  background: var(--panel, #fff);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1;
+}
+.s-copy-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.s-copy-btn.copied {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 .s-tips-note {
   font-size: 11px;
