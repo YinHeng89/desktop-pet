@@ -326,7 +326,12 @@ function onHeaderMouseDown(e: MouseEvent): void {
     <div v-if="galleryOpen" class="s-gallery-mask" @click.self="closeGallery">
       <div class="s-gallery">
         <div class="s-gallery-head">
-          <span class="s-gallery-title">在线画廊</span>
+          <div class="s-gallery-head-text">
+            <span class="s-gallery-title">在线画廊</span>
+            <span class="s-gallery-source">
+              数据来源：awesome-codex-pet（GitHub 开源仓库）· 预览图由 codexpet.top 提供
+            </span>
+          </div>
           <button class="s-gallery-close" @click="closeGallery">✕</button>
         </div>
         <div class="s-gallery-search">
@@ -359,15 +364,21 @@ function onHeaderMouseDown(e: MouseEvent): void {
                   @error="($event.target as HTMLImageElement).style.visibility = 'hidden'"
                 />
               </div>
-              <div class="s-gallery-card-name">{{ p.name }}</div>
+              <div class="s-gallery-card-top">
+                <span class="s-gallery-card-name">{{ p.name }}</span>
+                <span class="s-gallery-ver">v{{ p.sprite_version }}</span>
+              </div>
               <div class="s-gallery-card-meta">{{ p.author }} · {{ p.category }}</div>
+              <div class="s-gallery-card-desc">{{ p.description }}</div>
+              <div class="s-gallery-card-slug">ID: {{ p.slug }}</div>
               <button
                 class="s-gallery-dl"
+                :class="{ 'is-installed': installedSlugs.has(p.slug) && !downloading[p.slug] }"
                 :disabled="downloading[p.slug]"
                 @click="downloadPet(p)"
               >
-                <template v-if="installedSlugs.has(p.slug)">已下载</template>
-                <template v-else-if="downloading[p.slug]">下载中…</template>
+                <template v-if="downloading[p.slug]">下载中…</template>
+                <template v-else-if="installedSlugs.has(p.slug)">重新下载</template>
                 <template v-else>下载</template>
               </button>
             </div>
@@ -730,9 +741,9 @@ function onHeaderMouseDown(e: MouseEvent): void {
   z-index: 50;
 }
 .s-gallery {
-  width: 86%;
-  max-width: 520px;
-  max-height: 80%;
+  width: 94%;
+  max-width: 900px;
+  max-height: 88%;
   display: flex;
   flex-direction: column;
   background: var(--panel, #fff);
@@ -742,20 +753,30 @@ function onHeaderMouseDown(e: MouseEvent): void {
 }
 .s-gallery-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  padding: 14px 18px;
+  padding: 16px 20px;
   border-bottom: 1px solid var(--border, #eee);
 }
+.s-gallery-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .s-gallery-title {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
   color: var(--text);
+}
+.s-gallery-source {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
 }
 .s-gallery-close {
   border: none;
   background: transparent;
-  font-size: 16px;
+  font-size: 18px;
   color: var(--muted);
   cursor: pointer;
   line-height: 1;
@@ -764,7 +785,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
   color: var(--danger);
 }
 .s-gallery-body {
-  padding: 18px;
+  padding: 20px;
   overflow-y: auto;
 }
 .s-gallery-placeholder {
@@ -776,7 +797,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
 .s-gallery-search {
   display: flex;
   gap: 8px;
-  padding: 12px 18px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--border, #eee);
 }
 .s-gallery-search-input {
@@ -811,8 +832,8 @@ function onHeaderMouseDown(e: MouseEvent): void {
 }
 .s-gallery-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
 }
 .s-gallery-card {
   border: 1px solid var(--border, #eee);
@@ -823,7 +844,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
   background: var(--panel, #fff);
 }
 .s-gallery-thumb {
-  height: 96px;
+  height: 120px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -833,26 +854,59 @@ function onHeaderMouseDown(e: MouseEvent): void {
   max-width: 100%;
   max-height: 100%;
 }
+.s-gallery-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 10px 12px 0;
+}
 .s-gallery-card-name {
-  padding: 8px 10px 0;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.s-gallery-ver {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--primary);
+  background: var(--primary-soft, #f3f4ff);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
 .s-gallery-card-meta {
-  padding: 2px 10px 8px;
+  padding: 3px 12px 0;
   font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.s-gallery-card-desc {
+  padding: 6px 12px 0;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.s-gallery-card-slug {
+  padding: 4px 12px 0;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .s-gallery-dl {
-  margin: 0 10px 10px;
-  padding: 7px;
+  margin: 10px 12px 12px;
+  padding: 8px;
   border: none;
   border-radius: var(--radius-sm, 8px);
   background: var(--primary);
@@ -868,5 +922,15 @@ function onHeaderMouseDown(e: MouseEvent): void {
 .s-gallery-dl:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* 已下载（非下载中）：描边样式，明确「可重复下载」 */
+.s-gallery-dl.is-installed {
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+}
+.s-gallery-dl.is-installed:hover:not(:disabled) {
+  background: var(--primary-soft, #f3f4ff);
+  opacity: 1;
 }
 </style>
