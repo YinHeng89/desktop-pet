@@ -120,12 +120,16 @@ function enqueueNotify(payload: { text?: string; action?: string; duration?: num
     text,
     action: payload?.action,
   }
-  // 若指定了动作，先播该动作（优先级最高）
-  if (item.action && item.action !== 'talk') {
-    playAction(item.action, undefined, () => scheduleRandomAction())
-  }
   notifyQueue.push(item)
-  if (!currentNotify.value) showNextNotify()
+  // 若指定了动作，先播该动作（优先级最高）；动作播完后再显示气泡，
+  // 否则 showNotify 会立即把 petState 切成 'talk'，覆盖动作动画导致"选了动作没生效"。
+  if (item.action && item.action !== 'talk') {
+    playAction(item.action, undefined, () => {
+      if (!currentNotify.value) showNextNotify()
+    })
+  } else if (!currentNotify.value) {
+    showNextNotify()
+  }
 }
 
 // ── hover 宠物 ──
