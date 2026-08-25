@@ -32,15 +32,13 @@ export async function preloadTauri(): Promise<void> {
 
 /** 同步调用系统级 startDragging（必须在 mousedown 内同步调用） */
 export function startDragging(): Promise<void> {
-  if (!isTauri) return Promise.resolve()
-  // windowApi 未预加载时动态加载（避免依赖 preloadTauri 的时序）
-  const api = windowApi ?? import('@tauri-apps/api/window')
-  return Promise.resolve(api).then((w) => {
-    windowApi = w
-    return w.getCurrentWindow().startDragging()
-  }).catch((e) => {
+  if (!isTauri || !windowApi) return Promise.resolve()
+  try {
+    return windowApi.getCurrentWindow().startDragging()
+  } catch (e) {
     console.error('[tauri] startDragging failed', e)
-  })
+    return Promise.resolve()
+  }
 }
 
 /** 注册 Tauri 事件监听（Rust → 前端） */

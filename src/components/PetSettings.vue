@@ -3,12 +3,15 @@
 import { onMounted, ref, computed } from 'vue'
 import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, registerDownloadedPet, loadPetManifest, type PetDef } from '../store/pet'
 import { pushNotify } from '../store/notify'
-import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, type OnlinePetMeta } from '../tauri'
+import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, preloadTauri, type OnlinePetMeta } from '../tauri'
 import SpritePet from './SpritePet.vue'
 
 // settings 窗口是独立 webview，pets 由 App.vue onMounted 异步加载；
 // 此处兜底：挂载时若尚未加载则主动加载，保证列表与预览始终有数据。
 onMounted(() => {
+  // settings 是独立 webview 窗口，必须在此预加载 windowApi，
+  // 否则 startDragging 因 windowApi 为 null 而直接 return，窗口无法拖动。
+  void preloadTauri()
   if (!petStore.pets.length) {
     void loadPetManifest()
   }
@@ -756,18 +759,6 @@ function onHeaderMouseDown(e: MouseEvent): void {
   align-items: center;
   justify-content: center;
   z-index: 50;
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
-  background-image: radial-gradient(
-    140% 120% at 50% 0%,
-    rgba(255, 255, 255, 0.1) 0%,
-    rgba(255, 255, 255, 0) 55%
-  );
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .s-gallery-mask {
-    background: rgba(15, 23, 42, 0.6);
-  }
 }
 .s-gallery {
   width: 94%;
