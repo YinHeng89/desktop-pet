@@ -12,6 +12,8 @@ onMounted(() => {
   if (!petStore.pets.length) {
     void loadPetManifest()
   }
+  // 禁用右键菜单（避免无边框窗口里弹出 webview 默认菜单）
+  document.addEventListener('contextmenu', (e) => e.preventDefault())
 })
 
 function onSelect(id: string): void {
@@ -246,6 +248,9 @@ function onClose(): void {
   /* 无边框透明窗口：CSS 自绘圆角 */
   border-radius: 14px;
   overflow: hidden;
+  /* 禁止选中文字（避免拖动缩放滑块时误选中文本） */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .s-header {
   display: flex;

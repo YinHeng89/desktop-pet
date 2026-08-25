@@ -12,7 +12,7 @@
 - **宠物切换**：内置 3 只（Miku/龙神丸/Seedy）+ 外部 zip 导入/删除
 - **专属台词**：每只内置宠物有独立性格的搭话气泡
 - **像素穿透**：宠物/气泡可交互，透明区域点击穿透（macOS）
-- **开机自启**：托盘菜单 + 设置窗口开关（macOS LaunchAgent，带勾选状态）
+- **开机自启**：托盘菜单开关（macOS SMAppService 登录项，带勾选状态，需打包后 .app 生效）
 - **通用通知接口**：本地 HTTP 服务，任意外部应用可发通知（见下文）
 - **外部宠物自适应**：导入时解析精灵图实际尺寸，自动修正越界帧，避免异常布局导致宠物消失
 
@@ -59,9 +59,33 @@ Content-Type: application/json
 示例（curl）：
 
 ```bash
+# 只发文字
 curl -X POST http://127.0.0.1:8756/notify \
   -H "Content-Type: application/json" \
-  -d '{"text":"新任务：完成周报","action":"wave"}'
+  -d '{"text":"你好，这是一条测试通知！"}'
+
+# 带宠物动作 + 自定义时长
+curl -X POST http://127.0.0.1:8756/notify \
+  -H "Content-Type: application/json" \
+  -d '{"text":"太棒了！","action":"jump","duration":6000}'
+```
+
+Python：
+
+```python
+import requests
+requests.post("http://127.0.0.1:8756/notify",
+              json={"text": "来自 Python 的通知", "action": "wave"})
+```
+
+Node.js：
+
+```js
+await fetch("http://127.0.0.1:8756/notify", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ text: "来自 Node 的通知", action: "jump" }),
+})
 ```
 
 ## 项目结构
@@ -76,7 +100,7 @@ src-tauri/           # Rust 后端
     main.rs          # 入口：窗口 + 托盘 + 命令注册
     macos_pet.rs     # macOS 像素穿透
     pet_import.rs    # 外部宠物导入（含 webp 尺寸解析 + 越界修正）
-    autostart.rs     # 开机自启（LaunchAgent）
+    autostart.rs     # 开机自启（SMAppService 登录项）
     notify_server.rs # 本地通知 HTTP 服务
   icons/             # 应用图标 + 托盘图标（tray.png 由脚本生成）
 public/pets/         # 内置宠物精灵图资源
@@ -97,4 +121,4 @@ pet/                 # 外部宠物 zip 素材（开发用，可导入测试）
 
 - Tauri 2（Rust）
 - Vue 3 + TypeScript + Vite
-- 开机自启为自实现（LaunchAgent，无第三方插件依赖）
+- 开机自启使用 Apple 官方 SMAppService（登录项，无第三方插件依赖）

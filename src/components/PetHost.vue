@@ -259,6 +259,8 @@ onMounted(async () => {
   scheduleRandomAction()
   setTimeout(reportInteractiveRects, 100)
   window.addEventListener('mouseup', onGlobalMouseUp)
+  // 禁用右键菜单（透明无边框窗口，避免弹出 webview 默认菜单）
+  document.addEventListener('contextmenu', (e) => e.preventDefault())
 
   // 启动时按当前缩放设一次窗口尺寸（窗口跟随缩放）
   if (isTauri) void resizePetWindow(petStore.scale)
@@ -326,6 +328,9 @@ onUnmounted(() => {
   align-items: flex-end;
   pointer-events: none;
   --pet-scale: 1;
+  /* 禁止选中文字（气泡文字不可选中） */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .pet-stage {
   pointer-events: auto;
