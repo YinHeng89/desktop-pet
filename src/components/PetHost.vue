@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { isTauri, onEvent, emitEvent, setNotifyInteractiveRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow } from '../tauri'
 import { petStore, currentPet, openPetPicker, setPetVisible, loadPetManifest } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
@@ -273,7 +273,13 @@ onMounted(async () => {
   }
 
   scheduleRandomAction()
-  setTimeout(reportInteractiveRects, 100)
+  // 尽早并多次上报可交互矩形：macOS 穿透用 NSTimer 每 50ms 轮询一次，
+  // 若矩形未及时上报，启动瞬间会被误判「鼠标不在宠物上」→ ignoresMouseEvents=true → 穿透。
+  // 因此用 nextTick 立即上报，并用多档重试兜底 async import/invoke 的延迟。
+  await nextTick()
+  void reportInteractiveRects()
+  setTimeout(reportInteractiveRects, 50)
+  setTimeout(reportInteractiveRects, 150)
   window.addEventListener('mouseup', onGlobalMouseUp)
   // 禁用右键菜单（透明无边框窗口，避免弹出 webview 默认菜单）
   document.addEventListener('contextmenu', (e) => e.preventDefault())

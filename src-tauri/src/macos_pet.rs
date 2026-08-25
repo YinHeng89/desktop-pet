@@ -18,12 +18,28 @@ use std::sync::Mutex;
 // 可交互矩形（CSS 坐标，相对 notify 窗口内容区左上角）：(x, y, w, h)
 type Rect = (f64, f64, f64, f64);
 static INTERACTIVE_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
+// 前端是否已经上报过矩形。启动初期前端尚未上报时保持窗口可交互，
+// 避免 NSTimer 在矩形为空时把窗口误判为「穿透」。
+static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
 
 /// 前端调用：更新可交互区域列表。传空数组清空（整窗穿透）。
 #[tauri::command]
 pub fn set_notify_interactive_rects(rects: Vec<(f64, f64, f64, f64)>) {
     if let Ok(mut g) = INTERACTIVE_RECTS.lock() {
         *g = rects;
+    }
+    if let Ok(mut init) = RECTS_INITIALIZED.lock() {
+        *init = true;
+    }
+}
+
+/// 是否已初始化（前端上报过矩形）。未初始化时保持可交互。
+#[allow(dead_code)]
+fn rects_initialized() -> bool {
+    match RECTS_INITIALIZED.lock() {
+        Ok(g) => *g,
+        // 锁中毒：保守认为已初始化，按矩形正常判断
+        Err(_) => true,
     }
 }
 
@@ -42,6 +58,7 @@ fn hit_interactive(x: f64, y: f64) -> bool {
 #[cfg(target_os = "macos")]
 mod macos_impl {
     use super::hit_interactive;
+    use super::rects_initialized;
     use objc2::runtime::AnyObject;
     use objc2::{define_class, msg_send, class, sel, ClassType};
     use objc2_foundation::{NSPoint, NSRect, NSObject};
@@ -81,8 +98,13 @@ mod macos_impl {
                     let wx = mouse.x - frame.origin.x;
                     let wy = frame.size.height - (mouse.y - frame.origin.y);
 
-                    let hit = hit_interactive(wx, wy);
-                    let should_ignore = !hit;
+                    // 前端尚未上报矩形（启动初期）→ 保持可交互，避免误穿透；
+                    // 已初始化 → 按命中判断（命中可交互，未命中穿透）。
+                    let should_ignore = if rects_initialized() {
+                        !hit_interactive(wx, wy)
+                    } else {
+                        false
+                    };
                     let _: () = msg_send![window, setIgnoresMouseEvents: should_ignore];
                 }
             }

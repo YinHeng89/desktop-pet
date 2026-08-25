@@ -20,14 +20,27 @@ export function currentWindowLabel(): string {
 }
 
 // Tauri API 模块在运行时按需加载，但 startDragging 需在 mousedown 内同步调用，
-// 故预加载 window API。
+// 故预加载 window API；同时预加载 core(invoke)，避免首次上报可交互矩形时
+// 动态 import 造成的额外延迟（该延迟会赶不上 macOS 50ms 穿透轮询，导致鼠标误穿透）。
 let windowApi: typeof import('@tauri-apps/api/window') | null = null
+let coreApi: typeof import('@tauri-apps/api/core') | null = null
 
 export async function preloadTauri(): Promise<void> {
   if (!isTauri) return
   if (!windowApi) {
     windowApi = await import('@tauri-apps/api/window')
   }
+  if (!coreApi) {
+    coreApi = await import('@tauri-apps/api/core')
+  }
+}
+
+/** 同步拿到 invoke（若已预加载则直接用，避免动态 import 延迟） */
+async function getInvoke(): Promise<typeof import('@tauri-apps/api/core')['invoke']> {
+  if (coreApi) return coreApi.invoke
+  const core = await import('@tauri-apps/api/core')
+  coreApi = core
+  return core.invoke
 }
 
 /** 同步调用系统级 startDragging（必须在 mousedown 内同步调用） */
@@ -70,7 +83,7 @@ export async function setNotifyInteractiveRects(
 ): Promise<void> {
   if (!isTauri) return
   try {
-    const { invoke } = await import('@tauri-apps/api/core')
+    const invoke = await getInvoke()
     await invoke('set_notify_interactive_rects', { rects })
   } catch (e) {
     console.error('[tauri] setNotifyInteractiveRects failed', e)
