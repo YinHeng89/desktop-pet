@@ -369,7 +369,6 @@ function onHeaderMouseDown(e: MouseEvent): void {
                 <span class="s-gallery-ver">v{{ p.sprite_version }}</span>
               </div>
               <div class="s-gallery-card-meta">{{ p.author }} · {{ p.category }}</div>
-              <div class="s-gallery-card-desc">{{ p.description }}</div>
               <div class="s-gallery-card-slug">ID: {{ p.slug }}</div>
               <button
                 class="s-gallery-dl"
@@ -885,16 +884,6 @@ function onHeaderMouseDown(e: MouseEvent): void {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.s-gallery-card-desc {
-  padding: 6px 12px 0;
-  font-size: 12px;
-  color: var(--text);
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 .s-gallery-card-slug {
   padding: 4px 12px 0;
