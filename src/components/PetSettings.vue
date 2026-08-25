@@ -855,7 +855,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
 }
 .s-gallery-clear:hover {
   background: rgba(31, 39, 51, 0.12);
-  color: var(--text);
+  color: var(--muted);
 }
 .s-gallery-refresh {
   padding: 8px 14px;
