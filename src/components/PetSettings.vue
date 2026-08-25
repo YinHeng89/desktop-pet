@@ -749,11 +749,16 @@ function onHeaderMouseDown(e: MouseEvent): void {
   color: var(--danger);
 }
 .s-gallery-mask {
-  position: fixed;
-  inset: 0;
+  position: absolute;
+  top: -16px;
+  left: -20px;
+  right: -20px;
+  bottom: -20px;
   background: rgba(15, 23, 42, 0.45);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
+  border-radius: 14px;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
