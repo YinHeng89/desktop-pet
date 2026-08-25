@@ -750,19 +750,24 @@ function onHeaderMouseDown(e: MouseEvent): void {
 }
 .s-gallery-mask {
   position: absolute;
-  top: -16px;
-  left: -20px;
-  right: -20px;
-  bottom: -20px;
+  inset: 0;
   background: rgba(15, 23, 42, 0.45);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  border-radius: 14px;
-  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 50;
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  background-image: radial-gradient(
+    140% 120% at 50% 0%,
+    rgba(255, 255, 255, 0.1) 0%,
+    rgba(255, 255, 255, 0) 55%
+  );
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .s-gallery-mask {
+    background: rgba(15, 23, 42, 0.6);
+  }
 }
 .s-gallery {
   width: 94%;
