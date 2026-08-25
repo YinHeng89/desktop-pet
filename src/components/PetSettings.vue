@@ -846,7 +846,8 @@ function onRootMouseDown(e: MouseEvent): void {
 .s-field-label {
   display: block;
   font-size: 12px;
-  color: var(--muted);
+  font-weight: 600;
+  color: var(--text);
   margin: 4px 0 6px;
 }
 .s-modal-input {
