@@ -96,20 +96,8 @@ function onToggleVisible(e: Event): void {
 // ── 测试通知弹窗（自定义内容）──
 const notifyModalOpen = ref(false)
 const notifyText = ref('')
-const notifyAction = ref('')
-const NOTIFY_ACTIONS: Array<{ value: string; label: string }> = [
-  { value: '', label: '无（默认 idle）' },
-  { value: 'wave', label: '招手 wave' },
-  { value: 'jump', label: '跳跃 jump' },
-  { value: 'failed', label: '失败 failed' },
-  { value: 'working', label: '工作 working' },
-  { value: 'waiting', label: '等待 waiting' },
-  { value: 'look', label: '张望 look' },
-  { value: 'run', label: '跑步 run' },
-]
 function openNotifyModal(): void {
   notifyText.value = ''
-  notifyAction.value = ''
   notifyModalOpen.value = true
 }
 function closeNotifyModal(): void {
@@ -118,7 +106,7 @@ function closeNotifyModal(): void {
 function sendNotify(): void {
   const text = notifyText.value.trim()
   if (!text) return
-  pushNotify(text, notifyAction.value || undefined)
+  pushNotify(text)
   closeNotifyModal()
 }
 
@@ -449,17 +437,9 @@ function onRootMouseDown(e: MouseEvent): void {
           />
           <div class="s-char-count">{{ notifyText.length }}/120</div>
 
-          <label class="s-field-label">宠物动作</label>
-          <select v-model="notifyAction" class="s-modal-select">
-            <option v-for="a in NOTIFY_ACTIONS" :key="a.value" :value="a.value">{{ a.label }}</option>
-          </select>
-
           <div class="s-modal-tips">
             <div class="s-tips-title">调用教程</div>
-            <div class="s-tips-sub">① 前端 / Tauri 命令（本应用内）</div>
-            <pre class="s-code">import { pushNotify } from '@/store/notify'
-pushNotify('摸鱼一下~', 'wave')  // 动作可选：wave / jump / failed / working / waiting / look / run</pre>
-            <div class="s-tips-sub">② HTTP 接口（任意外部程序，端口 8756）</div>
+            <div class="s-tips-sub">HTTP 接口（任意外部程序，端口 8756）</div>
             <pre class="s-code">curl -X POST http://127.0.0.1:8756/notify \
   -H 'Content-Type: application/json' \
   -d '{"text":"下班啦！","action":"jump"}'</pre>
@@ -890,20 +870,6 @@ pushNotify('摸鱼一下~', 'wave')  // 动作可选：wave / jump / failed / wo
   font-size: 11px;
   color: var(--muted);
   margin: 4px 0 12px;
-}
-.s-modal-select {
-  width: 100%;
-  padding: 8px 11px;
-  border: 1px solid var(--border-strong, #ddd);
-  border-radius: var(--radius-sm, 8px);
-  font-size: 13px;
-  outline: none;
-  background: var(--panel, #fff);
-  color: var(--text);
-  cursor: pointer;
-}
-.s-modal-select:focus {
-  border-color: var(--primary);
 }
 .s-modal-tips {
   margin-top: 16px;
