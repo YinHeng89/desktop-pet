@@ -335,12 +335,20 @@ function onHeaderMouseDown(e: MouseEvent): void {
           <button class="s-gallery-close" @click="closeGallery">✕</button>
         </div>
         <div class="s-gallery-search">
-          <input
-            v-model="galleryKeyword"
-            class="s-gallery-search-input"
-            type="text"
-            placeholder="搜索名字 / 作者 / 分类"
-          />
+          <div class="s-gallery-search-wrap">
+            <input
+              v-model="galleryKeyword"
+              class="s-gallery-search-input"
+              type="text"
+              placeholder="搜索名字 / 作者 / 分类"
+            />
+            <button
+              v-if="galleryKeyword"
+              class="s-gallery-clear"
+              title="清空搜索"
+              @click="galleryKeyword = ''"
+            >✕</button>
+          </div>
           <button class="s-gallery-refresh" :disabled="galleryLoading" @click="loadGallery">
             {{ galleryLoading ? '加载中…' : '刷新' }}
           </button>
@@ -742,7 +750,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
 .s-gallery {
   width: 94%;
   max-width: 900px;
-  max-height: 88%;
+  height: 88%;
   display: flex;
   flex-direction: column;
   background: var(--panel, #fff);
@@ -784,6 +792,8 @@ function onHeaderMouseDown(e: MouseEvent): void {
   color: var(--danger);
 }
 .s-gallery-body {
+  flex: 1;
+  min-height: 0;
   padding: 20px;
   overflow-y: auto;
 }
@@ -799,9 +809,14 @@ function onHeaderMouseDown(e: MouseEvent): void {
   padding: 12px 20px;
   border-bottom: 1px solid var(--border, #eee);
 }
+.s-gallery-search-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
 .s-gallery-search-input {
   flex: 1;
-  padding: 8px 12px;
+  padding: 8px 32px 8px 12px;
   border: 1px solid var(--border-strong, #ddd);
   border-radius: var(--radius-sm, 8px);
   font-size: 13px;
@@ -811,6 +826,29 @@ function onHeaderMouseDown(e: MouseEvent): void {
 }
 .s-gallery-search-input:focus {
   border-color: var(--primary);
+}
+.s-gallery-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(31, 39, 51, 0.12);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.s-gallery-clear:hover {
+  background: rgba(31, 39, 51, 0.22);
+  color: var(--text);
 }
 .s-gallery-refresh {
   padding: 8px 14px;
