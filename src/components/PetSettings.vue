@@ -845,7 +845,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
   padding: 0;
   border: none;
   border-radius: 50%;
-  background: rgba(31, 39, 51, 0.1);
+  background: rgba(31, 39, 51, 0.06);
   color: var(--muted);
   cursor: pointer;
   display: flex;
@@ -854,7 +854,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
   transition: background 0.15s ease, color 0.15s ease;
 }
 .s-gallery-clear:hover {
-  background: rgba(31, 39, 51, 0.2);
+  background: rgba(31, 39, 51, 0.12);
   color: var(--text);
 }
 .s-gallery-refresh {
