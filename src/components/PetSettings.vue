@@ -91,17 +91,33 @@ function onToggleVisible(e: Event): void {
   setPetVisible(checked)
 }
 
-// ── 测试通知（多条，覆盖排队场景）──
-const TEST_NOTICES: Array<{ text: string; action?: string }> = [
-  { text: '🐾 这是一条测试通知，宠物气泡正常显示！' },
-  { text: '👋 你好呀，今天也要加油哦！', action: 'wave' },
-  { text: '🎉 太棒了，一切顺利！', action: 'jump' },
-  { text: '☕ 休息一下，喝杯咖啡吧~' },
+// ── 测试通知弹窗（自定义内容）──
+const notifyModalOpen = ref(false)
+const notifyText = ref('')
+const notifyAction = ref('')
+const NOTIFY_ACTIONS: Array<{ value: string; label: string }> = [
+  { value: '', label: '无（默认 idle）' },
+  { value: 'wave', label: '招手 wave' },
+  { value: 'jump', label: '跳跃 jump' },
+  { value: 'failed', label: '失败 failed' },
+  { value: 'working', label: '工作 working' },
+  { value: 'waiting', label: '等待 waiting' },
+  { value: 'look', label: '张望 look' },
+  { value: 'run', label: '跑步 run' },
 ]
-function testNotify(): void {
-  for (const t of TEST_NOTICES) {
-    pushNotify(t.text, t.action)
-  }
+function openNotifyModal(): void {
+  notifyText.value = ''
+  notifyAction.value = ''
+  notifyModalOpen.value = true
+}
+function closeNotifyModal(): void {
+  notifyModalOpen.value = false
+}
+function sendNotify(): void {
+  const text = notifyText.value.trim()
+  if (!text) return
+  pushNotify(text, notifyAction.value || undefined)
+  closeNotifyModal()
 }
 
 // ── 添加外部宠物 ──
@@ -271,7 +287,7 @@ function onRootMouseDown(e: MouseEvent): void {
             <span class="s-toggle-track"><span class="s-toggle-thumb" /></span>
             <span class="s-toggle-text">显示宠物</span>
           </label>
-          <button class="s-test-btn" @click="testNotify">测试通知</button>
+          <button class="s-test-btn" @click="openNotifyModal">测试通知</button>
         </div>
       </div>
 
@@ -407,6 +423,50 @@ function onRootMouseDown(e: MouseEvent): void {
               </button>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 测试通知弹窗（自定义内容） -->
+    <div v-if="notifyModalOpen" class="s-modal-mask" @click.self="closeNotifyModal">
+      <div class="s-modal">
+        <div class="s-modal-head">
+          <span class="s-modal-title">发送测试通知</span>
+          <button class="s-close" @click="closeNotifyModal">×</button>
+        </div>
+        <div class="s-modal-body">
+          <label class="s-field-label">通知内容</label>
+          <textarea
+            v-model="notifyText"
+            class="s-modal-input"
+            rows="3"
+            maxlength="120"
+            placeholder="输入要显示的通知文字…"
+            @keydown.meta.enter="sendNotify"
+            @keydown.ctrl.enter="sendNotify"
+          />
+          <div class="s-char-count">{{ notifyText.length }}/120</div>
+
+          <label class="s-field-label">宠物动作</label>
+          <select v-model="notifyAction" class="s-modal-select">
+            <option v-for="a in NOTIFY_ACTIONS" :key="a.value" :value="a.value">{{ a.label }}</option>
+          </select>
+
+          <div class="s-modal-tips">
+            <div class="s-tips-title">调用教程</div>
+            <div class="s-tips-sub">① 前端 / Tauri 命令（本应用内）</div>
+            <pre class="s-code">import { pushNotify } from '@/store/notify'
+pushNotify('摸鱼一下~', 'wave')  // 动作可选：wave / jump / failed / working / waiting / look / run</pre>
+            <div class="s-tips-sub">② HTTP 接口（任意外部程序，端口 8756）</div>
+            <pre class="s-code">curl -X POST http://127.0.0.1:8756/notify \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"下班啦！","action":"jump"}'</pre>
+            <div class="s-tips-note">提示：宠物需处于「显示」状态才能看到气泡；双击气泡或最多显示 3 条后会自动消失。</div>
+          </div>
+        </div>
+        <div class="s-modal-foot">
+          <button class="s-modal-cancel" @click="closeNotifyModal">取消</button>
+          <button class="s-modal-send" :disabled="!notifyText.trim()" @click="sendNotify">发送</button>
         </div>
       </div>
     </div>
@@ -761,6 +821,156 @@ function onRootMouseDown(e: MouseEvent): void {
   align-items: center;
   justify-content: center;
   z-index: 50;
+}
+.s-modal-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+.s-modal {
+  width: 92%;
+  max-width: 460px;
+  max-height: 90%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #fff);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+.s-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border, #eee);
+  flex-shrink: 0;
+}
+.s-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.s-modal-body {
+  padding: 16px 20px;
+  overflow-y: auto;
+}
+.s-field-label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 4px 0 6px;
+}
+.s-modal-input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border-strong, #ddd);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+  background: var(--panel, #fff);
+  color: var(--text);
+  resize: vertical;
+  box-sizing: border-box;
+}
+.s-modal-input:focus {
+  border-color: var(--primary);
+}
+.s-char-count {
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+  margin: 4px 0 12px;
+}
+.s-modal-select {
+  width: 100%;
+  padding: 8px 11px;
+  border: 1px solid var(--border-strong, #ddd);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 13px;
+  outline: none;
+  background: var(--panel, #fff);
+  color: var(--text);
+  cursor: pointer;
+}
+.s-modal-select:focus {
+  border-color: var(--primary);
+}
+.s-modal-tips {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--panel-2, rgba(241, 243, 247, 0.7));
+  border-radius: var(--radius-sm, 8px);
+}
+.s-tips-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.s-tips-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 8px 0 4px;
+}
+.s-code {
+  margin: 0;
+  padding: 8px 10px;
+  background: rgba(31, 39, 51, 0.06);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.s-tips-note {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-top: 8px;
+}
+.s-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border, #eee);
+  flex-shrink: 0;
+}
+.s-modal-cancel,
+.s-modal-send {
+  padding: 7px 16px;
+  border-radius: var(--radius-sm, 8px);
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.s-modal-cancel {
+  background: transparent;
+  border-color: var(--border-strong, #ddd);
+  color: var(--text);
+}
+.s-modal-cancel:hover {
+  background: rgba(31, 39, 51, 0.05);
+}
+.s-modal-send {
+  background: var(--primary);
+  color: #fff;
+}
+.s-modal-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.s-modal-send:not(:disabled):hover {
+  filter: brightness(0.95);
 }
 .s-gallery {
   width: 94%;
