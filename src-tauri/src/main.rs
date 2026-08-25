@@ -273,6 +273,8 @@ fn main() {
             pet_import::import_pet,
             pet_import::list_imported_pets,
             pet_import::delete_imported_pet,
+            pet_import::browse_online_pets,
+            pet_import::download_online_pet,
             notify_server::push_notify
         ])
         .run(tauri::generate_context!())

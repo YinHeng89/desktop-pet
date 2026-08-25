@@ -455,3 +455,187 @@ pub async fn list_imported_pets(app: tauri::AppHandle) -> Result<Vec<PetDefJson>
     .await
     .map_err(|e| format!("读取外部宠物列表异常: {e}"))?
 }
+
+// ─────────────────────────────────────────────────────────────
+// 在线画廊：接入 awesome-codex-pet（GitHub raw 为权威源，codexpet.top 仅预览图）
+// ─────────────────────────────────────────────────────────────
+
+/// awesome-codex-pet 仓库（main 分支）原始内容基地址
+const CODEPET_GITHUB_RAW: &str =
+    "https://raw.githubusercontent.com/legeling/awesome-codex-pet/main";
+/// 预览图基地址（codexpet.top 提供，已实测可用；加载失败前端回退文字）
+const CODEPET_PREVIEW_BASE: &str = "https://codexpet.top/assets/previews";
+
+/// 在线宠物列表项（画廊用）。来自 awesome-codex-pet 的 pets.json 索引。
+#[derive(Serialize, Clone)]
+pub struct OnlinePetMeta {
+    /// 唯一标识（仓库目录 slug，如 firefly--lingxiaotian），下载时即作为本地 id
+    pub slug: String,
+    /// 显示名（优先中文 localized_names.zh，回退 name）
+    pub name: String,
+    pub author: String,
+    pub category: String,
+    pub description: String,
+    /// 精灵图版本（1 或 2），仅展示用，下载时按实际图尺寸修正
+    pub sprite_version: u32,
+    /// 预览图 URL（codexpet.top 的 idle.webp）；可能 404，前端需容错
+    pub preview_url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RawOnlinePet {
+    #[serde(default)]
+    slug: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    localized_names: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    author: String,
+    #[serde(default)]
+    primary_category: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    sprite_version_number: u32,
+}
+
+/// 浏览在线宠物：拉取 awesome-codex-pet 的 pets.json 索引并返回列表。
+#[tauri::command]
+pub async fn browse_online_pets() -> Result<Vec<OnlinePetMeta>, String> {
+    let url = format!("{CODEPET_GITHUB_RAW}/pets.json");
+    let client = reqwest::Client::builder()
+        .user_agent("PetBuddy/0.1 (online-gallery)")
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("拉取宠物索引失败（网络）: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("拉取宠物索引失败: HTTP {}", resp.status()));
+    }
+    let list: Vec<RawOnlinePet> = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析宠物索引失败: {e}"))?;
+
+    let mut out = Vec::with_capacity(list.len());
+    for p in list {
+        if p.slug.is_empty() {
+            continue;
+        }
+        // 显示名：优先中文，回退英文、原始名、slug
+        let name = p
+            .localized_names
+            .get("zh")
+            .cloned()
+            .filter(|s| !s.is_empty())
+            .or_else(|| p.localized_names.get("en").cloned())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                if p.name.is_empty() {
+                    None
+                } else {
+                    Some(p.name.clone())
+                }
+            })
+            .unwrap_or_else(|| p.slug.clone());
+        let preview_url = format!("{CODEPET_PREVIEW_BASE}/{}/webp/idle.webp", p.slug);
+        out.push(OnlinePetMeta {
+            slug: p.slug,
+            name,
+            author: p.author,
+            category: p.primary_category,
+            description: p.description,
+            sprite_version: p.sprite_version_number,
+            preview_url,
+        });
+    }
+    Ok(out)
+}
+
+/// 下载在线宠物：拉取 <slug> 目录下的 pet.json + spritesheet.webp，
+/// 复用内置的 build_pet_def 组装，写入 app_data_dir/pets/<slug>/，并刷新托盘菜单。
+#[tauri::command]
+pub async fn download_online_pet(
+    app: tauri::AppHandle,
+    slug: String,
+) -> Result<PetDefJson, String> {
+    // id 白名单校验（slug 即本地目录名，防目录穿越）
+    if slug.is_empty()
+        || !slug
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err("宠物 slug 含非法字符".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("PetBuddy/0.1 (online-gallery)")
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+
+    let json_url = format!("{CODEPET_GITHUB_RAW}/pets/{slug}/pet.json");
+    let sheet_url = format!("{CODEPET_GITHUB_RAW}/pets/{slug}/spritesheet.webp");
+
+    let json_resp = client
+        .get(&json_url)
+        .send()
+        .await
+        .map_err(|e| format!("拉取 pet.json 失败: {e}"))?;
+    if !json_resp.status().is_success() {
+        return Err(format!("远程宠物不存在（HTTP {}）", json_resp.status()));
+    }
+    let json_text = json_resp
+        .text()
+        .await
+        .map_err(|e| format!("读取 pet.json 失败: {e}"))?;
+
+    let sheet_resp = client
+        .get(&sheet_url)
+        .send()
+        .await
+        .map_err(|e| format!("拉取 spritesheet 失败: {e}"))?;
+    if !sheet_resp.status().is_success() {
+        return Err(format!("远程精灵图不存在（HTTP {}）", sheet_resp.status()));
+    }
+    let sheet_bytes = sheet_resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取精灵图字节失败: {e}"))?;
+
+    let raw: RawPetJson = serde_json::from_str(&json_text)
+        .map_err(|e| format!("pet.json 解析失败: {e}"))?;
+
+    // 用 slug 作为本地 id（保证唯一，避免与远程 id 命名冲突）
+    let mut raw = raw;
+    if raw.id.trim().is_empty() {
+        raw.id = slug.clone();
+    }
+
+    // 组装定义并落盘（含把 webp 写入目录，便于后续 list_imported_pets 复用）
+    let pets_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取数据目录失败: {e}"))?
+        .join("pets");
+    let target_dir = pets_root.join(&slug);
+    if target_dir.exists() {
+        std::fs::remove_dir_all(&target_dir).map_err(|e| format!("清理旧宠物目录失败: {e}"))?;
+    }
+    std::fs::create_dir_all(&target_dir).map_err(|e| format!("创建宠物目录失败: {e}"))?;
+    std::fs::write(target_dir.join("pet.json"), &json_text)
+        .map_err(|e| format!("写入 pet.json 失败: {e}"))?;
+    std::fs::write(target_dir.join("spritesheet.webp"), &sheet_bytes)
+        .map_err(|e| format!("写入 spritesheet 失败: {e}"))?;
+
+    let def = build_pet_def(&raw, &sheet_bytes);
+
+    // 下载成功：通知主进程重建托盘菜单
+    let _ = app.emit("pet-pets-changed", ());
+
+    Ok(def)
+}

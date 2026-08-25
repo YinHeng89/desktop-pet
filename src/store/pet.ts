@@ -155,6 +155,33 @@ export async function importExternalPet(base64: string, fileName: string): Promi
   return pet
 }
 
+/** 注册在线下载的宠物（download_online_pet 返回结构与 import_pet 一致） */
+export function registerDownloadedPet(ext: {
+  id: string
+  display_name: string
+  description: string
+  spritesheet: string
+  idle: FrameSeq
+  talk: FrameSeq
+  actions: Record<string, FrameSeq>
+}): PetDef {
+  const pet: PetDef = {
+    id: ext.id,
+    displayName: ext.display_name,
+    description: ext.description,
+    dir: ext.id,
+    spritesheet: ext.spritesheet,
+    idle: ext.idle,
+    talk: ext.talk,
+    actions: ext.actions,
+    external: true,
+  }
+  const idx = petStore.pets.findIndex((p) => p.id === ext.id)
+  if (idx >= 0) petStore.pets[idx] = pet
+  else petStore.pets.push(pet)
+  return pet
+}
+
 export async function deleteExternalPet(id: string): Promise<void> {
   const core = await import('@tauri-apps/api/core')
   await core.invoke('delete_imported_pet', { id })

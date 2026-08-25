@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // 宠物设置页（settings 窗口整页内容）。
 import { onMounted, ref } from 'vue'
-import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, loadPetManifest, type PetDef } from '../store/pet'
+import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, registerDownloadedPet, loadPetManifest, type PetDef } from '../store/pet'
 import { pushNotify } from '../store/notify'
-import { closeSettingsWindow } from '../tauri'
+import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, type OnlinePetMeta } from '../tauri'
 import SpritePet from './SpritePet.vue'
 
 // settings 窗口是独立 webview，pets 由 App.vue onMounted 异步加载；
@@ -112,11 +112,70 @@ function onPickFile(): void {
 
 // ── 在线画廊 ──
 const galleryOpen = ref(false)
+const galleryLoading = ref(false)
+const galleryError = ref('')
+const onlinePets = ref<OnlinePetMeta[]>([])
+const galleryKeyword = ref('')
+// 正在下载的 slug 集合（用于按钮 loading 态）
+const downloading = ref<Record<string, boolean>>({})
+
+const filteredOnlinePets = computed<OnlinePetMeta[]>(() => {
+  const kw = galleryKeyword.value.trim().toLowerCase()
+  if (!kw) return onlinePets.value
+  return onlinePets.value.filter(
+    (p) =>
+      p.name.toLowerCase().includes(kw) ||
+      p.author.toLowerCase().includes(kw) ||
+      p.category.toLowerCase().includes(kw),
+  )
+})
+
+// 已下载到本地的 slug 集合（避免重复下载）
+const installedSlugs = computed<Set<string>>(
+  () => new Set(petStore.pets.map((p) => p.id)),
+)
+
 function openGallery(): void {
   galleryOpen.value = true
+  void loadGallery()
 }
 function closeGallery(): void {
   galleryOpen.value = false
+}
+async function loadGallery(): Promise<void> {
+  if (galleryLoading.value) return
+  galleryLoading.value = true
+  galleryError.value = ''
+  try {
+    const list = await browseOnlinePets()
+    onlinePets.value = list
+    if (!list.length) galleryError.value = '画廊为空或加载失败'
+  } catch (e) {
+    galleryError.value = `加载画廊失败：${(e as Error)?.message || e}`
+  } finally {
+    galleryLoading.value = false
+  }
+}
+async function downloadPet(p: OnlinePetMeta): Promise<void> {
+  if (downloading.value[p.slug]) return
+  downloading.value = { ...downloading.value, [p.slug]: true }
+  try {
+    const def = (await downloadOnlinePet(p.slug)) as {
+      id: string
+      display_name: string
+      description: string
+      spritesheet: string
+      idle: PetDef['idle']
+      talk: PetDef['talk']
+      actions: Record<string, PetDef['idle']>
+    }
+    registerDownloadedPet(def)
+    pushNotify(`已下载宠物「${def.display_name}」`)
+  } catch (e) {
+    pushNotify(`下载失败：${(e as Error)?.message || e}`)
+  } finally {
+    downloading.value = { ...downloading.value, [p.slug]: false }
+  }
 }
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf)
@@ -154,11 +213,19 @@ async function onFileChosen(e: Event): Promise<void> {
 function onClose(): void {
   void closeSettingsWindow()
 }
+
+// 顶部 header 拖动窗口（Tauri v2 用 startDragging API，必须在 mousedown 内同步调用）。
+// 关闭按钮本身有 @click，这里跳过，避免拖动吞掉点击。
+function onHeaderMouseDown(e: MouseEvent): void {
+  const target = e.target as HTMLElement
+  if (target.closest('.s-close')) return
+  void startDragging()
+}
 </script>
 
 <template>
   <div class="settings-root">
-    <div class="s-header" data-tauri-drag-region>
+    <div class="s-header" @mousedown="onHeaderMouseDown">
       <span class="s-title">PetBuddy 设置</span>
       <button class="s-close" @click="onClose">×</button>
     </div>
@@ -255,15 +322,56 @@ function onClose(): void {
       </div>
     </div>
 
-    <!-- 在线画廊弹窗（骨架，列表/下载逻辑后续接入） -->
+    <!-- 在线画廊弹窗 -->
     <div v-if="galleryOpen" class="s-gallery-mask" @click.self="closeGallery">
       <div class="s-gallery">
         <div class="s-gallery-head">
           <span class="s-gallery-title">在线画廊</span>
           <button class="s-gallery-close" @click="closeGallery">✕</button>
         </div>
+        <div class="s-gallery-search">
+          <input
+            v-model="galleryKeyword"
+            class="s-gallery-search-input"
+            type="text"
+            placeholder="搜索名字 / 作者 / 分类"
+          />
+          <button class="s-gallery-refresh" :disabled="galleryLoading" @click="loadGallery">
+            {{ galleryLoading ? '加载中…' : '刷新' }}
+          </button>
+        </div>
         <div class="s-gallery-body">
-          <div class="s-gallery-placeholder">画廊加载中…（接入 awesome-codex-pet 中）</div>
+          <div v-if="galleryLoading && !onlinePets.length" class="s-gallery-placeholder">
+            画廊加载中…
+          </div>
+          <div v-else-if="galleryError" class="s-gallery-placeholder">{{ galleryError }}</div>
+          <div v-else-if="!filteredOnlinePets.length" class="s-gallery-placeholder">
+            没有匹配的宠物
+          </div>
+          <div v-else class="s-gallery-grid">
+            <div v-for="p in filteredOnlinePets" :key="p.slug" class="s-gallery-card">
+              <div class="s-gallery-thumb">
+                <img
+                  :src="p.preview_url"
+                  :alt="p.name"
+                  loading="lazy"
+                  class="s-gallery-img"
+                  @error="($event.target as HTMLImageElement).style.visibility = 'hidden'"
+                />
+              </div>
+              <div class="s-gallery-card-name">{{ p.name }}</div>
+              <div class="s-gallery-card-meta">{{ p.author }} · {{ p.category }}</div>
+              <button
+                class="s-gallery-dl"
+                :disabled="downloading[p.slug]"
+                @click="downloadPet(p)"
+              >
+                <template v-if="installedSlugs.has(p.slug)">已下载</template>
+                <template v-else-if="downloading[p.slug]">下载中…</template>
+                <template v-else>下载</template>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -290,8 +398,8 @@ function onClose(): void {
   justify-content: space-between;
   margin-bottom: 14px;
   flex-shrink: 0;
-  /* 无边框窗口：header 作为拖动区域 */
-  cursor: default;
+  /* 无边框窗口：header 作为拖动区域（data-tauri-drag-region 由 Tauri v2 处理） */
+  cursor: move;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -666,5 +774,101 @@ function onClose(): void {
   color: var(--muted);
   font-size: 13px;
   padding: 40px 0;
+}
+.s-gallery-search {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border, #eee);
+}
+.s-gallery-search-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong, #ddd);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 13px;
+  outline: none;
+  background: var(--panel, #fff);
+  color: var(--text);
+}
+.s-gallery-search-input:focus {
+  border-color: var(--primary);
+}
+.s-gallery-refresh {
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong, #ddd);
+  border-radius: var(--radius-sm, 8px);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.s-gallery-refresh:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.s-gallery-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.s-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 12px;
+}
+.s-gallery-card {
+  border: 1px solid var(--border, #eee);
+  border-radius: var(--radius-sm, 8px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #fff);
+}
+.s-gallery-thumb {
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary-soft, #f3f4ff);
+}
+.s-gallery-img {
+  max-width: 100%;
+  max-height: 100%;
+}
+.s-gallery-card-name {
+  padding: 8px 10px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.s-gallery-card-meta {
+  padding: 2px 10px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.s-gallery-dl {
+  margin: 0 10px 10px;
+  padding: 7px;
+  border: none;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.s-gallery-dl:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.s-gallery-dl:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

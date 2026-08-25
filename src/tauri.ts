@@ -154,3 +154,39 @@ export async function getAutoStart(): Promise<boolean> {
     return false
   }
 }
+
+// ── 在线画廊（awesome-codex-pet）──
+
+export interface OnlinePetMeta {
+  slug: string
+  name: string
+  author: string
+  category: string
+  description: string
+  sprite_version: number
+  preview_url: string
+}
+
+/** 浏览在线宠物列表（拉取 awesome-codex-pet 索引） */
+export async function browseOnlinePets(): Promise<OnlinePetMeta[]> {
+  if (!isTauri) return []
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return (await invoke<OnlinePetMeta[]>('browse_online_pets')) ?? []
+  } catch (e) {
+    console.error('[tauri] browseOnlinePets failed', e)
+    return []
+  }
+}
+
+/** 下载指定 slug 的在线宠物（返回宠物定义，自动注册进宠物列表） */
+export async function downloadOnlinePet(slug: string): Promise<unknown> {
+  if (!isTauri) return null
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke('download_online_pet', { slug })
+  } catch (e) {
+    console.error('[tauri] downloadOnlinePet failed', e)
+    throw e
+  }
+}
