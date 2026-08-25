@@ -439,8 +439,8 @@ function onRootMouseDown(e: MouseEvent): void {
             <div class="s-char-count">{{ notifyText.length }}/120</div>
           </div>
 
+          <div class="s-field-label">调用教程</div>
           <div class="s-modal-tips">
-            <div class="s-tips-title">调用教程</div>
             <div class="s-tips-sub">HTTP 接口（任意外部程序，端口 8756）</div>
             <pre class="s-code">curl -X POST http://127.0.0.1:8756/notify \
   -H 'Content-Type: application/json' \
@@ -881,21 +881,15 @@ function onRootMouseDown(e: MouseEvent): void {
   user-select: none;
 }
 .s-modal-tips {
-  margin-top: 16px;
+  margin-top: 8px;
   padding: 12px;
   background: var(--panel-2, rgba(241, 243, 247, 0.7));
   border-radius: var(--radius-sm, 8px);
 }
-.s-tips-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 8px;
-}
 .s-tips-sub {
   font-size: 11px;
   color: var(--muted);
-  margin: 8px 0 4px;
+  margin: 0 0 4px;
 }
 .s-code {
   margin: 0;
