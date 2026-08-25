@@ -537,7 +537,7 @@ function onRootMouseDown(e: MouseEvent): void {
   right: 0;
   height: 6px;
   border-radius: 999px;
-  background: var(--panel-2);
+  background: #e3e6ec;
 }
 .s-slider-fill {
   position: absolute;
