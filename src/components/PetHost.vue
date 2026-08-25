@@ -30,6 +30,12 @@ let runTimer: ReturnType<typeof setTimeout> | null = null
 const petState = ref<string>('idle')
 const usePet = computed(() => !!currentPet.value && petStore.visible)
 
+// 宠物真实渲染宽度（帧宽 × 缩放），用于锁定气泡容器宽度、稳定尾巴对齐。
+const petWidth = computed(() => (petStore.frame?.width || 192) * petStore.scale)
+const petWidthCss = computed(() => `${petWidth.value}px`)
+// 尾巴对准宠物水平中心：距气泡右边缘 = 宠物半宽。
+const tailRightCss = computed(() => `${petWidth.value / 2}px`)
+
 // 通用：播放一个动作，播完回 idle 再回调 onDone
 function playAction(name: string, durationMs?: number, onDone?: () => void): void {
   const seq = currentPet.value?.actions?.[name]
@@ -286,7 +292,11 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="usePet" class="pet-host" :style="{ '--pet-scale': petStore.scale }">
+  <div
+    v-if="usePet"
+    class="pet-host"
+    :style="{ '--pet-scale': petStore.scale, '--pet-w': petWidthCss, '--tail-right': tailRightCss }"
+  >
     <Transition name="bubble" mode="out-in">
       <div
         v-if="currentNotify"
@@ -328,6 +338,8 @@ onUnmounted(() => {
   align-items: flex-end;
   pointer-events: none;
   --pet-scale: 1;
+  /* 容器宽度锁定为宠物真实宽度，气泡不再撑大容器，左右贴边距离恒定 */
+  width: var(--pet-w, 192px);
   /* 禁止选中文字（气泡文字不可选中） */
   user-select: none;
   -webkit-user-select: none;
@@ -339,6 +351,11 @@ onUnmounted(() => {
 .bubble {
   pointer-events: auto;
   position: relative;
+  /* 宽度随文字自适应（不撑满、无最小限制），居中，最大 300px；
+     与搭话气泡统一：短文字就短，长文字最多 300px，下箭头始终对准宠物中心 */
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
   max-width: calc(300px * var(--pet-scale));
   margin-bottom: calc(6px * var(--pet-scale));
   padding: calc(10px * var(--pet-scale)) calc(14px * var(--pet-scale));
@@ -352,6 +369,7 @@ onUnmounted(() => {
 .bubble::after {
   content: '';
   position: absolute;
+  /* 气泡已居中，下箭头用 left:50% 落在气泡底部正中，即对准宠物中心 */
   left: 50%;
   transform: translateX(-50%);
   bottom: calc(-9px * var(--pet-scale));
@@ -371,13 +389,35 @@ onUnmounted(() => {
   white-space: pre-wrap;
 }
 .chat-bubble {
-  position: absolute;
-  right: calc(96px * var(--pet-scale));
-  bottom: 100%;
-  max-width: calc(220px * var(--pet-scale));
+  /* 宽度随文字自适应，整体往左移 20px（transform 同时移动气泡与下箭头），下箭头随气泡一起左移 */
+  pointer-events: auto;
+  position: relative;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+  transform: translateX(calc(-20px * var(--pet-scale)));
+  max-width: calc(300px * var(--pet-scale));
   margin-bottom: calc(6px * var(--pet-scale));
   padding: calc(7px * var(--pet-scale)) calc(12px * var(--pet-scale));
   background: #fff;
+  border: 0.5px solid rgba(15, 23, 42, 0.06);
+  border-radius: calc(14px * var(--pet-scale));
+  box-shadow:
+    0 6px 18px rgba(15, 23, 42, 0.16),
+    0 2px 6px rgba(15, 23, 42, 0.1);
+}
+.chat-bubble::after {
+  content: '';
+  position: absolute;
+  /* 气泡已水平居中，下箭头用 left:50% 落在气泡底部正中，即对准宠物中心 */
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(-9px * var(--pet-scale));
+  width: 0;
+  height: 0;
+  border-left: calc(8px * var(--pet-scale)) solid transparent;
+  border-right: calc(8px * var(--pet-scale)) solid transparent;
+  border-top: calc(9px * var(--pet-scale)) solid #fff;
 }
 .chat-bubble .bubble-text {
   font-size: calc(12px * var(--pet-scale));
