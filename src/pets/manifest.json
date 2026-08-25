@@ -1,0 +1,66 @@
+{
+  "frame": {
+    "width": 192,
+    "height": 208,
+    "cols": 8
+  },
+  "pets": [
+    {
+      "id": "miku",
+      "displayName": "Miku",
+      "description": "元气满满的虚拟歌姬初音未来，会陪你一起盯着任务进度，为你的每一次完成轻声哼唱。",
+      "dir": "miku",
+      "spritesheet": "miku/spritesheet.webp",
+      "idle": { "row": 0, "count": 6, "fps": 8 },
+      "talk": { "row": 3, "count": 4, "fps": 10 },
+      "actions": {
+        "wave": { "row": 3, "count": 4, "fps": 10 },
+        "jump": { "row": 4, "count": 5, "fps": 10 },
+        "failed": { "row": 5, "count": 8, "fps": 10 },
+        "waiting": { "row": 6, "count": 6, "fps": 8 },
+        "working": { "row": 7, "count": 6, "fps": 8 },
+        "look": { "row": 8, "count": 6, "fps": 8 },
+        "runningLeft": { "row": 2, "count": 8, "fps": 10 },
+        "runningRight": { "row": 1, "count": 8, "fps": 10 }
+      }
+    },
+    {
+      "id": "ryujinmaru",
+      "displayName": "龙神丸",
+      "description": "来自神部界、陪你守候 Codex 任务进度的经典 SD 龙神丸。忠诚可靠的小守护神，会在你忙碌时安静陪伴，任务完成时为你欢呼打气。",
+      "dir": "ryujinmaru",
+      "spritesheet": "ryujinmaru/spritesheet.webp",
+      "idle": { "row": 0, "count": 6, "fps": 8 },
+      "talk": { "row": 3, "count": 4, "fps": 10 },
+      "actions": {
+        "wave": { "row": 3, "count": 4, "fps": 10 },
+        "jump": { "row": 4, "count": 5, "fps": 10 },
+        "failed": { "row": 5, "count": 8, "fps": 10 },
+        "waiting": { "row": 6, "count": 6, "fps": 8 },
+        "working": { "row": 7, "count": 6, "fps": 8 },
+        "look": { "row": 9, "count": 8, "fps": 8 },
+        "runningLeft": { "row": 2, "count": 8, "fps": 10 },
+        "runningRight": { "row": 1, "count": 8, "fps": 10 }
+      }
+    },
+    {
+      "id": "Seedy",
+      "displayName": "Seedy",
+      "description": "来自 ChatGPT 桌面客户端的 Seedy，一颗可爱的小种子伙伴。圆滚滚、充满好奇心，喜欢观察你在键盘前的一举一动，会为你的每一次灵感发芽而雀跃。",
+      "dir": "Seedy",
+      "spritesheet": "Seedy/spritesheet.webp",
+      "idle": { "row": 0, "count": 6, "fps": 8 },
+      "talk": { "row": 3, "count": 4, "fps": 10 },
+      "actions": {
+        "wave": { "row": 3, "count": 4, "fps": 10 },
+        "jump": { "row": 4, "count": 5, "fps": 10 },
+        "failed": { "row": 5, "count": 8, "fps": 10 },
+        "waiting": { "row": 6, "count": 6, "fps": 8 },
+        "working": { "row": 7, "count": 6, "fps": 8 },
+        "look": { "row": 9, "count": 8, "fps": 8 },
+        "runningLeft": { "row": 2, "count": 8, "fps": 10 },
+        "runningRight": { "row": 1, "count": 8, "fps": 10 }
+      }
+    }
+  ]
+}

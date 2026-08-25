@@ -1,0 +1,8 @@
+{
+  "id": "ryujinmaru",
+  "displayName": "龙神丸",
+  "description": "来自神部界、陪你守候 Codex 任务进度的经典 SD 龙神丸。",
+  "spritesheetPath": "spritesheet.webp",
+  "spriteVersionNumber": 2,
+  "kind": "object"
+}

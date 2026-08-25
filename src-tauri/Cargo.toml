@@ -1,0 +1,30 @@
+[package]
+name = "petbuddy"
+version = "0.1.0"
+description = "PetBuddy — 跨平台桌面宠物 + 通用通知接收器"
+authors = ["PetBuddy"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# macos-private-api 用于透明无边框窗口；tray-icon 启用系统托盘
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png", "image-ico"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+# 外部宠物导入：zip 解压
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+
+[profile.release]
+panic = "abort"
+codegen-units = 4
+lto = "thin"
+opt-level = 3
+strip = true

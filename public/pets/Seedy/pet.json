@@ -1,0 +1,8 @@
+{
+  "id": "Seedy",
+  "displayName": "Seedy",
+  "description": "来自ChatGPT客户端移植的Seedy。",
+  "spritesheetPath": "spritesheet.webp",
+  "spriteVersionNumber": 2,
+  "kind": "object"
+}

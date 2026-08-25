@@ -1,0 +1,156 @@
+// PetBuddy 的 Tauri 封装（精简版）：仅宠物所需能力。
+// 双窗口架构（main=宠物窗口，settings=设置窗口），
+// 跨窗口状态通过 emitEvent（前端→前端全局广播）与 Rust command 同步。
+
+export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+// 当前 webview 所属窗口的 label（用于多窗口路由：main=宠物窗口，settings=设置窗口）。
+// 同步读 Tauri 注入的 __TAURI_INTERNALS__.metadata.currentWindow.label。
+// 该字段在 webview 创建时即存在（不依赖任何异步注入），首帧即可正确路由，无竞态。
+export function currentWindowLabel(): string {
+  if (typeof window === 'undefined') return 'main'
+  try {
+    const internals = (window as unknown as {
+      __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } }
+    }).__TAURI_INTERNALS__
+    return internals?.metadata?.currentWindow?.label ?? 'main'
+  } catch {
+    return 'main'
+  }
+}
+
+// Tauri API 模块在运行时按需加载，但 startDragging 需在 mousedown 内同步调用，
+// 故预加载 window API。
+let windowApi: typeof import('@tauri-apps/api/window') | null = null
+
+export async function preloadTauri(): Promise<void> {
+  if (!isTauri) return
+  if (!windowApi) {
+    windowApi = await import('@tauri-apps/api/window')
+  }
+}
+
+/** 同步调用系统级 startDragging（必须在 mousedown 内同步调用） */
+export function startDragging(): Promise<void> {
+  if (!isTauri) return Promise.resolve()
+  // windowApi 未预加载时动态加载（避免依赖 preloadTauri 的时序）
+  const api = windowApi ?? import('@tauri-apps/api/window')
+  return Promise.resolve(api).then((w) => {
+    windowApi = w
+    return w.getCurrentWindow().startDragging()
+  }).catch((e) => {
+    console.error('[tauri] startDragging failed', e)
+  })
+}
+
+/** 注册 Tauri 事件监听（Rust → 前端） */
+export async function onEvent(
+  event: string,
+  handler: (payload: unknown) => void,
+): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  const un = await listen(event, (e) => handler(e.payload))
+  return () => un()
+}
+
+/** 跨窗口广播事件（前端 → 前端，如设置窗口改缩放/显隐/切换宠物同步给 main 窗口）。
+ *  走 Rust command broadcast_event（invoke → app.emit），规避前端 emit 跨窗口不生效的问题。 */
+export async function emitEvent(event: string, payload: unknown = undefined): Promise<void> {
+  if (!isTauri) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('broadcast_event', { event, payload: payload ?? null })
+  } catch (e) {
+    console.error(`[tauri] emitEvent('${event}') failed`, e)
+  }
+}
+
+/** 上报可交互矩形（macOS 像素穿透用） */
+export async function setNotifyInteractiveRects(
+  rects: Array<[number, number, number, number]>,
+): Promise<void> {
+  if (!isTauri) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('set_notify_interactive_rects', { rects })
+  } catch (e) {
+    console.error('[tauri] setNotifyInteractiveRects failed', e)
+  }
+}
+
+/** 显示/隐藏宠物窗口（visible 开关联动整个窗口） */
+export async function showPetWindow(): Promise<void> {
+  if (!isTauri) return
+  try {
+    const w = await windowApi!.Window.getByLabel('main')
+    await w?.show()
+  } catch (e) {
+    console.error('[tauri] showPetWindow failed', e)
+  }
+}
+export async function hidePetWindow(): Promise<void> {
+  if (!isTauri) return
+  try {
+    const w = await windowApi!.Window.getByLabel('main')
+    await w?.hide()
+  } catch (e) {
+    console.error('[tauri] hidePetWindow failed', e)
+  }
+}
+
+/** 按缩放比例重设 main 宠物窗口尺寸（窗口跟随宠物缩放） */
+export async function resizePetWindow(scale: number): Promise<void> {
+  if (!isTauri) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('resize_pet_window', { scale })
+  } catch (e) {
+    console.error('[tauri] resizePetWindow failed', e)
+  }
+}
+
+/** 打开设置窗口（Rust command 负责 show/center/focus） */
+export async function openSettingsWindow(): Promise<void> {
+  if (!isTauri) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('open_settings_window')
+  } catch (e) {
+    console.error('[tauri] openSettingsWindow failed', e)
+  }
+}
+
+/** 关闭（隐藏）设置窗口 */
+export async function closeSettingsWindow(): Promise<void> {
+  if (!isTauri) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('close_settings_window')
+  } catch (e) {
+    console.error('[tauri] closeSettingsWindow failed', e)
+  }
+}
+
+/** 设置开机自启 */
+export async function setAutoStart(enabled: boolean): Promise<void> {
+  if (!isTauri) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('set_autostart', { enabled })
+  } catch (e) {
+    console.error('[tauri] setAutoStart failed', e)
+  }
+}
+
+/** 查询开机自启状态 */
+export async function getAutoStart(): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return (await invoke<boolean>('get_autostart')) ?? false
+  } catch (e) {
+    console.error('[tauri] getAutoStart failed', e)
+    return false
+  }
+}
