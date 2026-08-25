@@ -414,7 +414,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
   background: var(--bg);
   padding: 16px 20px 20px;
   /* 无边框透明窗口：CSS 自绘圆角 */
-  border-radius: 14px;
+  border-radius: 40px;
   overflow: hidden;
   /* 禁止选中文字（避免拖动缩放滑块时误选中文本） */
   user-select: none;
@@ -754,7 +754,7 @@ function onHeaderMouseDown(e: MouseEvent): void {
   background: rgba(15, 23, 42, 0.45);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  border-radius: 14px;
+  border-radius: 40px;
   overflow: hidden;
   display: flex;
   align-items: center;
