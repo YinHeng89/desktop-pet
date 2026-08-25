@@ -1094,13 +1094,17 @@ pushNotify('摸鱼一下~', 'wave')  // 动作可选：wave / jump / failed / wo
   color: var(--muted);
 }
 .s-gallery-refresh {
-  padding: 8px 14px;
+  width: 4em;
+  padding: 8px 0;
   border: 1px solid var(--border-strong, #ddd);
   border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--muted);
   font-size: 13px;
   cursor: pointer;
+  white-space: nowrap;
+  text-align: center;
+  box-sizing: border-box;
 }
 .s-gallery-refresh:hover:not(:disabled) {
   border-color: var(--primary);
