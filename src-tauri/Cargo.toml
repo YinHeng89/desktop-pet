@@ -19,7 +19,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = "0.3"
-objc2-app-kit = "0.3"
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSApplication", "NSRunningApplication"] }
 objc2-service-management = { version = "0.3", features = ["SMAppService"] }
 
 [profile.release]
