@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
-import { isTauri, onEvent, emitEvent, setNotifyInteractiveRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow } from '../tauri'
+import { isTauri, onEvent, setNotifyInteractiveRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow } from '../tauri'
 import { petStore, currentPet, openPetPicker, setPetVisible, loadPetManifest } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
@@ -263,12 +263,6 @@ onMounted(async () => {
     // 托盘：显示/隐藏宠物
     onEvent('pet-toggle-visible', () => {
       setPetVisible(!petStore.visible)
-    })
-    // 设置窗口打开时主动请求当前选中的宠物，避免其首屏闪现第一个宠物
-    onEvent('request-current-pet', () => {
-      if (petStore.currentId) {
-        void emitEvent('pet-switch', petStore.currentId)
-      }
     })
   }
 
