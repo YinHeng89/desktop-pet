@@ -425,7 +425,7 @@ function onRootMouseDown(e: MouseEvent): void {
           <button class="s-close" @click="closeNotifyModal">×</button>
         </div>
         <div class="s-modal-body">
-          <label class="s-field-label">通知内容</label>
+          <div class="s-field-label">通知内容</div>
           <div class="s-input-wrap">
             <textarea
               v-model="notifyText"
