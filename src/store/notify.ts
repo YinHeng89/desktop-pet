@@ -31,7 +31,9 @@ export const notifyStore = reactive<NotifyStore>({
 export function pushNotify(text: string, action?: string, duration?: number): Promise<void> {
   if (isTauri) {
     return import('@tauri-apps/api/core')
-      .then(({ invoke }) => invoke('push_notify', { text, action, duration }))
+      .then(async ({ invoke }) => {
+        await invoke('push_notify', { text, action, duration })
+      })
       .catch((e) => {
         console.error('[notify] push_notify 调用失败:', e)
         throw e
