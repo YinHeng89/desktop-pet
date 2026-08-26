@@ -1126,9 +1126,10 @@ function onRootMouseUp(): void {
   max-width: 460px;
   max-height: 90%;
   display: flex;
+  /* 弹窗圆角统一 8px（与设置窗/蒙版一致） */
   flex-direction: column;
   background: var(--panel, #fff);
-  border-radius: var(--radius-lg, 16px);
+  border-radius: 8px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
   overflow: hidden;
 }
@@ -1195,7 +1196,7 @@ function onRootMouseUp(): void {
   width: 90%;
   max-width: 380px;
   background: var(--panel, #fff);
-  border-radius: var(--radius-lg, 16px);
+  border-radius: 8px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
   overflow: hidden;
   display: flex;
@@ -1400,7 +1401,7 @@ function onRootMouseUp(): void {
   display: flex;
   flex-direction: column;
   background: var(--panel, #fff);
-  border-radius: var(--radius-lg, 16px);
+  border-radius: 8px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
   overflow: hidden;
 }
