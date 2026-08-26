@@ -69,4 +69,4 @@ echo "前端构建完成，开始 Tauri 打包…"
 npm run tauri build
 
 echo ""
-echo "构建完成，当前版本: $NEW_VERSION（如有改动请自行 git commit）"
+echo "构建完成，当前版本: $NEW_VERSION (如有改动请自行 git commit)"
