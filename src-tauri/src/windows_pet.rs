@@ -135,8 +135,9 @@ pub fn setup_notify_interactive(app: &tauri::AppHandle) {
 #[cfg(target_os = "windows")]
 pub fn setup_window_rounded_corners(hwnd: isize) {
     use windows_sys::Win32::Graphics::Gdi::{
-        CreateRoundRectRgn, DeleteObject, GetWindowRect, SetWindowRgn,
+        CreateRoundRectRgn, DeleteObject, SetWindowRgn,
     };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
     use windows_sys::Win32::Foundation::RECT;
 
     if hwnd == 0 {
