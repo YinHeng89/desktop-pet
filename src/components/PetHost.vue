@@ -507,7 +507,9 @@ onUnmounted(() => {
   white-space: pre-wrap;
 }
 .chat-bubble {
-  /* 宽度随文字自适应，整体往左移 20px（transform 同时移动气泡与下箭头），下箭头随气泡一起左移 */
+  /* 完全继承 .bubble 的 padding/background/border/border-radius/box-shadow/font-size，
+     保证搭话气泡与通知气泡视觉完全统一（WebView2 下两种气泡尺寸/字号/圆角一致）。
+     仅保留位置偏移 transform（整体往左移 20px，让箭头对齐宠物中心偏左的嘴部）。 */
   pointer-events: auto;
   position: relative;
   width: fit-content;
@@ -515,31 +517,6 @@ onUnmounted(() => {
   margin-right: auto;
   transform: translateX(calc(-20px * var(--pet-scale)));
   max-width: calc(300px * var(--pet-scale));
-  margin-bottom: calc(6px * var(--pet-scale));
-  padding: calc(7px * var(--pet-scale)) calc(12px * var(--pet-scale));
-  background: #fff;
-  border: 0.5px solid rgba(15, 23, 42, 0.06);
-  /* 固定 14px（与设置窗统一用 --radius-window），保证两端圆角一致 */
-  border-radius: var(--radius-window);
-  box-shadow:
-    0 6px 18px rgba(15, 23, 42, 0.16),
-    0 2px 6px rgba(15, 23, 42, 0.1);
-}
-.chat-bubble::after {
-  content: '';
-  position: absolute;
-  /* 气泡已水平居中，下箭头用 left:50% 落在气泡底部正中，即对准宠物中心 */
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(-9px * var(--pet-scale));
-  width: 0;
-  height: 0;
-  border-left: calc(8px * var(--pet-scale)) solid transparent;
-  border-right: calc(8px * var(--pet-scale)) solid transparent;
-  border-top: calc(9px * var(--pet-scale)) solid #fff;
-}
-.chat-bubble .bubble-text {
-  font-size: calc(12px * var(--pet-scale));
 }
 
 .bubble-enter-active {

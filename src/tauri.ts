@@ -127,8 +127,10 @@ export async function showPetWindow(): Promise<void> {
 export async function hidePetWindow(): Promise<void> {
   if (!isTauri) return
   try {
-    const w = await windowApi!.Window.getByLabel('main')
-    await w?.hide()
+    // 走 Rust command 而非 windowApi.hide()：Rust 内部会先 SetWindowRgn(0) 清空
+    // 像素级裁切区域，再 hide，避免 Windows DWM 按旧 region 渲染装饰闪现窗口边框。
+    const invoke = await getInvoke()
+    await invoke('hide_pet_window')
   } catch (e) {
     console.error('[tauri] hidePetWindow failed', e)
   }

@@ -290,6 +290,7 @@ fn main() {
             macos_pet::set_notify_interactive_rects,
             windows_pet::set_pet_hit_rects,
             windows_pet::apply_pet_hit_rects,
+            windows_pet::hide_pet_window,
             pet_import::import_pet,
             pet_import::list_imported_pets,
             pet_import::delete_imported_pet,

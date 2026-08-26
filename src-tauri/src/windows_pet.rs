@@ -11,8 +11,7 @@
 
 use std::sync::Mutex;
 
-// 仅在 Windows 平台需要 Manager（获取 HWND）
-#[cfg(target_os = "windows")]
+// Manager 特性提供 app.get_webview_window(...)，在所有平台都需要
 use tauri::Manager;
 
 // 可交互矩形（CSS 逻辑像素，相对窗口内容区/视口左上角）：(x, y, w, h)
@@ -56,6 +55,34 @@ pub fn apply_pet_hit_rects(app: tauri::AppHandle) {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = app;
+    }
+}
+
+/// 隐藏 main 宠物窗口（hide 前先清空 SetWindowRgn，避免 hide 瞬间 DWM 按
+/// 旧 region 渲染装饰/边框闪现）。非 Windows 平台走普通 hide。
+#[tauri::command]
+pub fn hide_pet_window(app: tauri::AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(w) = app.get_webview_window("main") {
+            if let Ok(hwnd) = w.hwnd() {
+                // 先清 region（HRGN=0 表示清除裁切），再 hide。
+                // 不清的话，hide 瞬间 Windows DWM 会按"宠物+气泡"小 region 渲染
+                // 窗口缩略图/装饰，而原始窗口矩形（更大）暴露在透明区外，视觉上
+                // 就是"看到了窗口边框"。
+                use windows_sys::Win32::Graphics::Gdi::SetWindowRgn;
+                unsafe {
+                    SetWindowRgn(hwnd.0 as isize, 0, 1);
+                }
+            }
+            let _ = w.hide();
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.hide();
+        }
     }
 }
 
