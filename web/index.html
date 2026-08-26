@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PetBuddy · 你的桌面小伙伴</title>
+  <meta name="description" content="PetBuddy 是一只会住在你桌面上的透明小宠物。它会跟随光标、陪你聊天、提醒你摸鱼，支持 macOS 与 Windows。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- 顶部导航 -->
+  <header class="nav" id="nav">
+    <a class="nav__brand" href="#top">
+      <span class="nav__logo" aria-hidden="true">◣◢</span>
+      <span class="nav__name">PetBuddy</span>
+    </a>
+    <nav class="nav__links">
+      <a href="#features">特性</a>
+      <a href="#pets">宠物</a>
+      <a href="#platforms">平台</a>
+      <a href="#download">下载</a>
+    </nav>
+    <a href="#download" class="btn btn--small nav__cta">免费领养 →</a>
+  </header>
+
+  <main id="top">
+    <!-- 英雄区 -->
+    <section class="hero">
+      <div class="hero__bg" aria-hidden="true"></div>
+      <div class="hero__inner">
+        <div class="hero__copy">
+          <p class="hero__tag">✿ 桌面常驻 · 像素陪伴 · v0.1.14</p>
+          <h1 class="hero__title">
+            一只会住在<br />
+            你<span class="hl">桌面上</span>的小可爱
+          </h1>
+          <p class="hero__sub">
+            它透明、安静、从不打扰，却在每一次你分神时悄悄卖萌。
+            跟随光标、陪你对话、右键摸摸它——让你的电脑不再冷冰冰。
+          </p>
+          <div class="hero__actions">
+            <a href="#download" class="btn btn--primary">↓ 立即下载</a>
+            <a href="#features" class="btn btn--ghost">看看它能干啥</a>
+          </div>
+          <ul class="hero__facts">
+            <li><b>2.3 MB</b><span>轻量无负担</span></li>
+            <li><b>macOS</b><span>+ Windows</span></li>
+            <li><b>0 打扰</b><span>透明常驻</span></li>
+          </ul>
+        </div>
+
+        <!-- 英雄区宠物展示台 -->
+        <div class="hero__stage">
+          <div class="stage" id="stage">
+            <div class="stage__floor" aria-hidden="true"></div>
+            <button class="stage__pet" id="heroPet" type="button" aria-label="宠物">
+              <canvas id="heroCanvas" class="stage__canvas"></canvas>
+            </button>
+            <div class="stage__bubble" id="heroBubble">
+              <span id="heroBubbleText">嗨～我是你的桌面小伙伴！</span>
+              <i class="bubble__tail"></i>
+            </div>
+            <div class="stage__shadow" aria-hidden="true"></div>
+          </div>
+          <div class="stage__hint">点我一下试试 ↯</div>
+        </div>
+      </div>
+      <div class="hero__clouds" aria-hidden="true">
+        <span style="--i:0"></span><span style="--i:1"></span>
+        <span style="--i:2"></span><span style="--i:3"></span>
+      </div>
+    </section>
+
+    <!-- 特性区 -->
+    <section class="section" id="features">
+      <div class="section__head">
+        <h2 class="section__title">它能为你做点啥？</h2>
+        <p class="section__desc">不是又一个占内存的 App，而是一个真正陪在你身边的桌面小生命。</p>
+      </div>
+      <div class="cards">
+        <article class="card" data-reveal>
+          <div class="card__icon">🐾</div>
+          <h3>跟随光标</h3>
+          <p>宠物会悄悄跟着你的鼠标移动，像只黏人的小猫，桌面从此有了温度。</p>
+        </article>
+        <article class="card" data-reveal>
+          <div class="card__icon">💬</div>
+          <h3>气泡对话</h3>
+          <p>从台词库里随机蹦出可爱碎碎念，偶尔还会跟你聊上两句，绝不冷场。</p>
+        </article>
+        <article class="card" data-reveal>
+          <div class="card__icon">🖱️</div>
+          <h3>点击互动</h3>
+          <p>戳一戳它会做表情、挥手、跳跃，每一次互动都有专属的小反应。</p>
+        </article>
+        <article class="card" data-reveal>
+          <div class="card__icon">🍱</div>
+          <h3>右键菜单</h3>
+          <p>切换宠物、喂点零食、打开设置、一键退出——所有操作都在右键里。</p>
+        </article>
+        <article class="card" data-reveal>
+          <div class="card__icon">⌨️</div>
+          <h3>全局快捷键</h3>
+          <p>即使宠物窗口没聚焦，快捷键照样生效，随时唤起你的小伙伴。</p>
+        </article>
+        <article class="card" data-reveal>
+          <div class="card__icon">🔋</div>
+          <h3>开机自启</h3>
+          <p>勾选一次，以后每次开机它都已经在桌面上等你，从不迟到。</p>
+        </article>
+        <article class="card" data-reveal>
+          <div class="card__icon">🌙</div>
+          <h3>闲置行为</h3>
+          <p>你不在时它会自己发呆、打盹、东张西望，仿佛真的在陪你加班。</p>
+        </article>
+        <article class="card" data-reveal>
+          <div class="card__icon">🪟</div>
+          <h3>透明常驻</h3>
+          <p>无边框透明窗口、置顶显示，安静地待在角落，从不挡你做事。</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- 宠物展示区 -->
+    <section class="section section--pets" id="pets">
+      <div class="section__head">
+        <h2 class="section__title">认识一下三位小伙伴</h2>
+        <p class="section__desc">每只宠物都有专属性格与动作，挑一只最合眼缘的带回家。</p>
+      </div>
+
+      <div class="petpicker">
+        <div class="petpicker__tabs" id="petTabs" role="tablist">
+          <button class="ptab is-active" data-pet="miku" role="tab">Miku</button>
+          <button class="ptab" data-pet="seedy" role="tab">Seedy</button>
+          <button class="ptab" data-pet="ryujinmaru" role="tab">Ryūjinmaru</button>
+        </div>
+
+        <div class="petpicker__stage">
+          <div class="petcard">
+            <div class="petcard__screen">
+              <canvas id="petCanvas" class="petcard__canvas"></canvas>
+              <div class="petcard__shadow" aria-hidden="true"></div>
+            </div>
+            <div class="petcard__info">
+              <h3 id="petName">Miku</h3>
+              <p id="petDesc">元气满满的虚拟歌姬初音未来，会陪你一起盯着任务进度，为你的每一次完成轻声哼唱。</p>
+              <div class="petcard__acts">
+                <button class="act" data-act="idle">待机</button>
+                <button class="act" data-act="talk">说话</button>
+                <button class="act" data-act="wave">挥手</button>
+                <button class="act" data-act="jump">跳跃</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 平台区 -->
+    <section class="section section--platforms" id="platforms">
+      <div class="section__head">
+        <h2 class="section__title">在哪里都能陪你</h2>
+        <p class="section__desc">基于 Tauri 打造，体积小、启动快、跨平台原生体验。</p>
+      </div>
+      <div class="platforms">
+        <div class="plat" data-reveal>
+          <div class="plat__icon">🍎</div>
+          <h3>macOS</h3>
+          <p>Intel 与 Apple Silicon 双架构支持，原生菜单栏与透明窗口。</p>
+          <span class="plat__tag">x64 · arm64</span>
+        </div>
+        <div class="plat" data-reveal>
+          <div class="plat__icon">🪟</div>
+          <h3>Windows</h3>
+          <p>Windows 10/11 即装即用，透明置顶窗口丝滑跟随。</p>
+          <span class="plat__tag">x64 · arm64</span>
+        </div>
+        <div class="plat" data-reveal>
+          <div class="plat__icon">⚡</div>
+          <h3>Tauri 内核</h3>
+          <p>比 Electron 轻一个数量级，2MB 出头，开机自启无感。</p>
+          <span class="plat__tag">Vue 3 · Rust</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 下载区 -->
+    <section class="section section--download" id="download">
+      <div class="download">
+        <div class="download__art" aria-hidden="true">📦</div>
+        <div class="download__body">
+          <h2>把小伙伴领回家</h2>
+          <p>当前版本 <b>v0.1.14</b> · 完全免费 · 持续更新中</p>
+          <div class="download__grid">
+            <a class="dl" href="#" data-os="mac-arm">
+              <span class="dl__os">macOS</span>
+              <span class="dl__arch">Apple Silicon (.dmg)</span>
+            </a>
+            <a class="dl" href="#" data-os="mac-intel">
+              <span class="dl__os">macOS</span>
+              <span class="dl__arch">Intel (.dmg)</span>
+            </a>
+            <a class="dl" href="#" data-os="win-x64">
+              <span class="dl__os">Windows</span>
+              <span class="dl__arch">x64 (.msi)</span>
+            </a>
+            <a class="dl" href="#" data-os="win-arm">
+              <span class="dl__os">Windows</span>
+              <span class="dl__arch">ARM64 (.msi)</span>
+            </a>
+          </div>
+          <p class="download__note">※ 下载按钮为占位链接，替换为你的实际发布地址即可。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ / 小贴士 -->
+    <section class="section section--faq">
+      <div class="section__head">
+        <h2 class="section__title">常见问题</h2>
+      </div>
+      <div class="faq" id="faq">
+        <details class="faq__item">
+          <summary>宠物会挡住我干活吗？</summary>
+          <p>不会。窗口完全透明、置顶但不抢焦点，平时缩在角落，需要时才出现。</p>
+        </details>
+        <details class="faq__item">
+          <summary>怎么换一只宠物？</summary>
+          <p>右键点击宠物，在菜单里选择「切换宠物」即可，随时切换不重启。</p>
+        </details>
+        <details class="faq__item">
+          <summary>如何开启开机自启？</summary>
+          <p>右键 → 设置 → 勾选「开机启动」，下次开机它就已经在等你啦。</p>
+        </details>
+        <details class="faq__item">
+          <summary>以后会增加更多宠物吗？</summary>
+          <p>会！宠物以精灵图 + 配置的形式加载，社区与官方都会持续上新。</p>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="footer__brand">◣◢ PetBuddy</div>
+      <p class="footer__copy">用 ❤️ 与像素打造 · 一只住在你桌面上的小伙伴</p>
+      <p class="footer__ver">v0.1.14 · Tauri + Vue 3</p>
+    </div>
+  </footer>
+
+  <!-- 回到顶部 -->
+  <button class="totop" id="toTop" type="button" aria-label="回到顶部">↑</button>
+
+  <script src="script.js"></script>
+</body>
+</html>
