@@ -120,11 +120,14 @@ pub fn setup_notify_interactive(app: &tauri::AppHandle) {
 ///
 /// 透明无边框窗口在 Windows 上仅靠 CSS `border-radius` 无法真正裁切窗口边角，
 /// WebView2 的透明区域仍保持矩形，因此会出现「外框是直角」的问题。
-/// 调用 DWM 的 `DWMWA_WINDOW_CORNER_PREFERENCE` 让系统给窗口加原生小圆角，
-/// 与 CSS 里的 `--radius-window: 14px` 保持一致。
+/// 调用 DWM 的 `DWMWA_WINDOW_CORNER_PREFERENCE` 让系统给窗口加原生**大圆角**，
+/// 与 CSS 里的 `--radius-window` 视觉保持一致(大圆角档在 2K/4K 高缩放下更明显)。
 ///
 /// Windows 10 不支持该 DWM 属性(调用会返回错误)，此时保持原有直角行为，
 /// 不影响功能；Windows 11 上生效后设置窗/气泡等子窗口四角即呈现圆角。
+///
+/// 注意：DWM 只提供预设档位(小/大)，无法精确指定像素；若需与 CSS 严格对齐，
+/// 应改用 `SetWindowRgn` 自绘(见方案二)，此处用系统大圆角档作为最小改动兜底。
 #[cfg(target_os = "windows")]
 pub fn setup_window_rounded_corners(hwnd: isize) {
     use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
@@ -134,13 +137,17 @@ pub fn setup_window_rounded_corners(hwnd: isize) {
     }
 
     // DWMWINDOWATTRIBUTE::DWMWA_WINDOW_CORNER_PREFERENCE = 33
-    // DWM_WINDOW_CORNER_PREFERENCE::DWMWCP_ROUNDSMALL = 3
+    // DWM_WINDOW_CORNER_PREFERENCE 真实枚举值(避免不同 windows-sys 版本命名差异)：
+    //   DWMWCP_DEFAULT     = 0
+    //   DWMWCP_DONOTROUND  = 1
+    //   DWMWCP_ROUNDSMALL  = 2
+    //   DWMWCP_ROUNDLARGE  = 3   <-- 这里用大圆角档，2K 屏上更明显
     // 使用硬编码数值避免不同 windows-sys 版本常量命名差异导致的编译问题。
     const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-    const DWMWCP_ROUNDSMALL: i32 = 3;
+    const DWMWCP_ROUNDLARGE: i32 = 3;
 
     unsafe {
-        let pref = DWMWCP_ROUNDSMALL;
+        let pref = DWMWCP_ROUNDLARGE;
         // DWM 属性值大小按微软文档为 sizeof(INT32) = 4 字节
         DwmSetWindowAttribute(
             hwnd,
