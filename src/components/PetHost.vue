@@ -213,7 +213,13 @@ function reportInteractiveRects(): void {
 // transitionend 事件）。
 let settleTimer: ReturnType<typeof setTimeout> | null = null
 
-function reportInteractiveRectsSettled(): void {
+async function reportInteractiveRectsSettled(): Promise<void> {
+  // 关键修复：watch 默认 flush 时机为 'pre'，回调在 Vue 把响应式变化 patch 到
+  // DOM 之前就同步触发。此时 bubbleEl.value 可能还指向旧气泡节点、或新气泡尚未
+  // 完成布局，立刻测量会拿到过时/错误的矩形，导致 SetWindowRgn 裁剪区域更新滞后
+  // 于气泡背景的绘制——在慢机器/主线程繁忙时表现为「箭头比气泡本体晚出现」。
+  // 先 await nextTick() 等 DOM 真正更新完，再测量并上报，慢设备上也稳。
+  await nextTick()
   reportInteractiveRects()
   if (settleTimer) clearTimeout(settleTimer)
   settleTimer = setTimeout(reportInteractiveRects, 340)
@@ -351,7 +357,7 @@ function onGlobalMouseUp(): void {
 watch(
   () => [currentNotify.value?.id, chatText.value, petStore.scale, petStore.visible, currentPet.value?.id],
   () => {
-    reportInteractiveRectsSettled()
+    void reportInteractiveRectsSettled()
   },
 )
 
@@ -415,7 +421,7 @@ onMounted(async () => {
   // reportInteractiveRectsSettled 内部会立即上报一次、并在 340ms 后再校正一次，
   // 足以覆盖首次挂载时的初始渲染 + 首次动画的时间窗口，不需要再手动加多档重试。
   await nextTick()
-  reportInteractiveRectsSettled()
+  void reportInteractiveRectsSettled()
   // 禁用右键菜单（透明无边框窗口，避免弹出 webview 默认菜单）
   document.addEventListener('contextmenu', (e) => e.preventDefault())
 
