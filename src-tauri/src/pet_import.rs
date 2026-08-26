@@ -409,6 +409,59 @@ pub async fn delete_imported_pet(app: tauri::AppHandle, id: String) -> Result<()
     Ok(())
 }
 
+/// 编辑外部宠物元信息：仅更新 displayName / description，不动精灵图与帧布局，
+/// 写回 pet.json 后通知主进程重建托盘菜单。
+#[tauri::command]
+pub async fn update_imported_pet(
+    app: tauri::AppHandle,
+    id: String,
+    display_name: Option<String>,
+    description: Option<String>,
+) -> Result<(), String> {
+    // id 白名单校验（防目录穿越）
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("宠物 id 含非法字符".into());
+    }
+
+    let pets_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取数据目录失败: {e}"))?
+        .join("pets");
+    let app_for_emit = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let json_path = pets_root.join(&id).join("pet.json");
+        if !json_path.exists() {
+            return Err(format!("宠物不存在: {}", id));
+        }
+        let raw = std::fs::read_to_string(&json_path).map_err(|e| format!("读取宠物配置失败: {e}"))?;
+        let mut pet: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|e| format!("解析宠物配置失败: {}", e))?;
+
+        if let Some(name) = display_name {
+            let name = name.trim().to_string();
+            // 空名字回退为原 displayName，避免清空
+            let fallback = pet["displayName"].as_str().unwrap_or("外部宠物").to_string();
+            pet["displayName"] = serde_json::Value::String(if name.is_empty() { fallback } else { name });
+        }
+        if let Some(desc) = description {
+            pet["description"] = serde_json::Value::String(desc.trim().to_string());
+        }
+
+        let new_raw = serde_json::to_string_pretty(&pet).map_err(|e| format!("序列化失败: {}", e))?;
+        std::fs::write(&json_path, new_raw).map_err(|e| format!("写入宠物配置失败: {}", e))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("更新任务异常: {}", e))??;
+
+    // 更新成功：通知主进程重建托盘菜单
+    let _ = app_for_emit.emit("pet-pets-changed", ());
+
+    Ok(())
+}
+
 /// 列出所有已导入的外部宠物（启动时恢复用）。扫描 app_data_dir/pets/，
 /// 逐个读取 pet.json + spritesheet.webp，返回宠物定义列表（含 base64）。
 #[tauri::command]

@@ -364,7 +364,7 @@ onUnmounted(() => {
         class="bubble"
         @mousedown="onPetMouseDown"
       >
-        <span class="bubble-text">{{ currentNotify.text }}</span>
+        <div class="bubble-scroll"><span class="bubble-text">{{ currentNotify.text }}</span></div>
       </div>
     </Transition>
     <Transition name="bubble" mode="out-in">
@@ -440,7 +440,18 @@ onUnmounted(() => {
   border-right: calc(8px * var(--pet-scale)) solid transparent;
   border-top: calc(9px * var(--pet-scale)) solid #fff;
 }
+.bubble-scroll {
+  max-height: calc(120px * var(--pet-scale));
+  overflow-y: auto;
+  /* 隐藏滚动条视觉（仍保留滚轮/触摸滚动能力），避免单行文本因亚像素误判而显示滚动条 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.bubble-scroll::-webkit-scrollbar {
+  display: none;
+}
 .bubble-text {
+  display: block;
   font-size: calc(13px * var(--pet-scale));
   font-weight: 500;
   color: var(--text);

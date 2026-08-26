@@ -207,6 +207,32 @@ export async function deleteExternalPet(id: string): Promise<void> {
   }
 }
 
+export async function updateExternalPet(
+  id: string,
+  patch: { displayName?: string; description?: string }
+): Promise<void> {
+  const core = await import('@tauri-apps/api/core')
+  await core.invoke('update_imported_pet', {
+    id,
+    displayName: patch.displayName,
+    description: patch.description,
+  })
+  // 更新本地列表对应项（displayName/description），实时反映到 UI
+  const idx = petStore.pets.findIndex((p) => p.id === id)
+  if (idx >= 0) {
+    const pet = petStore.pets[idx]
+    if (patch.displayName !== undefined) pet.displayName = patch.displayName
+    if (patch.description !== undefined) pet.description = patch.description
+    petStore.pets[idx] = { ...pet }
+  }
+  // 跨窗口广播：main 窗口 / 托盘名同步（若编辑的是当前宠物，名字实时变）
+  try {
+    localStorage.setItem(STORAGE_KEY_ID, petStore.currentId)
+  } catch {
+    /* ignore */
+  }
+}
+
 export function setCurrentPet(id: string): void {
   const pet = petStore.pets.find((p) => p.id === id)
   if (!pet) return

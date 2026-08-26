@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 宠物设置页（settings 窗口整页内容）。
 import { onMounted, ref, computed } from 'vue'
-import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, registerDownloadedPet, loadPetManifest, type PetDef } from '../store/pet'
+import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, updateExternalPet, registerDownloadedPet, loadPetManifest, type PetDef } from '../store/pet'
 import { pushNotify } from '../store/notify'
 import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, preloadTauri, type OnlinePetMeta } from '../tauri'
 import SpritePet from './SpritePet.vue'
@@ -55,6 +55,43 @@ async function doDelete(p: PetDef): Promise<void> {
   } catch (e) {
     console.error('[PetSettings] 删除宠物失败:', e)
     pushNotify('删除失败，请重试')
+  }
+}
+
+// ── 编辑外部宠物元信息（名字 + 描述）──
+const editPetOpen = ref(false)
+const editPetId = ref('')
+const editPetName = ref('')
+const editPetDesc = ref('')
+const editPetSaving = ref(false)
+const editPetError = ref('')
+function openEditPet(p: PetDef): void {
+  editPetId.value = p.id
+  editPetName.value = p.displayName
+  editPetDesc.value = p.description
+  editPetError.value = ''
+  editPetSaving.value = false
+  editPetOpen.value = true
+}
+function closeEditPet(): void {
+  editPetOpen.value = false
+}
+async function saveEditPet(): Promise<void> {
+  if (editPetSaving.value) return
+  editPetSaving.value = true
+  editPetError.value = ''
+  try {
+    await updateExternalPet(editPetId.value, {
+      displayName: editPetName.value,
+      description: editPetDesc.value,
+    })
+    pushNotify(`宠物信息已更新`, 'wave')
+    closeEditPet()
+  } catch (e) {
+    console.error('[PetSettings] 编辑宠物失败:', e)
+    editPetError.value = (e as Error)?.message || String(e)
+  } finally {
+    editPetSaving.value = false
   }
 }
 
@@ -346,6 +383,17 @@ function onRootMouseDown(e: MouseEvent): void {
             </div>
             <button
               v-if="p.external"
+              class="s-item-edit"
+              title="编辑宠物信息"
+              @click.stop="openEditPet(p)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+              </svg>
+            </button>
+            <button
+              v-if="p.external"
               class="s-item-del"
               :class="{ confirm: pendingDeleteId === p.id }"
               :title="pendingDeleteId === p.id ? '再次点击确认删除' : '删除该宠物'"
@@ -509,6 +557,46 @@ function onRootMouseDown(e: MouseEvent): void {
             :disabled="!notifyText.trim() || cooldownLeft > 0"
             @click="sendNotify"
           >{{ cooldownLeft > 0 ? `冷却中 ${cooldownLeft}s` : '发送通知' }}</button>
+        </div>
+      </div>
+      </div>
+    <!-- 编辑外部宠物弹窗 -->
+    <div v-if="editPetOpen" class="s-editpet-mask" @click.self="closeEditPet">
+      <div class="s-editpet">
+        <div class="s-editpet-head">
+          <span class="s-editpet-title">编辑宠物信息</span>
+          <button class="s-close" @click="closeEditPet">×</button>
+        </div>
+        <div class="s-editpet-body">
+          <label class="s-editpet-field">
+            <span class="s-editpet-label">名字</span>
+            <input
+              v-model="editPetName"
+              class="s-editpet-input"
+              type="text"
+              maxlength="40"
+              placeholder="宠物显示名"
+            />
+          </label>
+          <label class="s-editpet-field">
+            <span class="s-editpet-label">描述</span>
+            <textarea
+              v-model="editPetDesc"
+              class="s-editpet-textarea"
+              rows="3"
+              maxlength="200"
+              placeholder="宠物描述（可选）"
+            ></textarea>
+          </label>
+          <div v-if="editPetError" class="s-editpet-error">{{ editPetError }}</div>
+        </div>
+        <div class="s-editpet-foot">
+          <button class="s-editpet-cancel" @click="closeEditPet">取消</button>
+          <button
+            class="s-editpet-save"
+            :disabled="editPetSaving"
+            @click="saveEditPet"
+          >{{ editPetSaving ? '保存中…' : '保存' }}</button>
         </div>
       </div>
     </div>
@@ -795,6 +883,24 @@ function onRootMouseDown(e: MouseEvent): void {
   background: var(--danger);
   color: #fff;
 }
+.s-item-edit {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.s-item-edit:hover {
+  background: rgba(31, 39, 51, 0.08);
+  color: var(--text);
+}
 .s-del-confirm-text {
   font-size: 11px;
   font-weight: 600;
@@ -928,6 +1034,113 @@ function onRootMouseDown(e: MouseEvent): void {
 }
 .s-modal-input:focus {
   border-color: var(--primary);
+}
+
+/* 编辑外部宠物弹窗 */
+.s-editpet-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.s-editpet {
+  width: 90%;
+  max-width: 380px;
+  background: var(--panel, #fff);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.s-editpet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border, #eee);
+}
+.s-editpet-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.s-editpet-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.s-editpet-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.s-editpet-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.s-editpet-input,
+.s-editpet-textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border-strong, #ddd);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+  font-family: inherit;
+  resize: none;
+  box-sizing: border-box;
+  background: var(--panel, #fff);
+}
+.s-editpet-input:focus,
+.s-editpet-textarea:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+.s-editpet-error {
+  font-size: 12px;
+  color: #e5484d;
+}
+.s-editpet-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border, #eee);
+}
+.s-editpet-cancel {
+  padding: 7px 16px;
+  border: 1px solid var(--border-strong, #ddd);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.s-editpet-cancel:hover {
+  background: rgba(31, 39, 51, 0.05);
+}
+.s-editpet-save {
+  padding: 7px 18px;
+  border: none;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.s-editpet-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.s-editpet-save:not(:disabled):hover {
+  filter: brightness(0.95);
 }
 .s-input-wrap {
   position: relative;
