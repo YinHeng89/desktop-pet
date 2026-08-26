@@ -19,6 +19,13 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # 外部链接：用系统默认程序打开（浏览器）
 open = "5"
+# Windows 透明窗口鼠标穿透（SetWindowRgn 区域裁切）：仅 Windows 编译使用。
+# 版本与 tauri v2 内部 windows-sys 对齐（0.52），避免重复拉取不同版本。
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

@@ -90,6 +90,30 @@ export async function setNotifyInteractiveRects(
   }
 }
 
+/** 上报可交互矩形（Windows 透明区域穿透用，SetWindowRgn 裁切） */
+export async function setPetHitRects(
+  rects: Array<[number, number, number, number]>,
+): Promise<void> {
+  if (!isTauri) return
+  try {
+    const invoke = await getInvoke()
+    await invoke('set_pet_hit_rects', { rects })
+  } catch (e) {
+    console.error('[tauri] setPetHitRects failed', e)
+  }
+}
+
+/** 触发 Windows 端把当前 hit rects 应用到窗口（SetWindowRgn 即时生效） */
+export async function applyPetHitRects(): Promise<void> {
+  if (!isTauri) return
+  try {
+    const invoke = await getInvoke()
+    await invoke('apply_pet_hit_rects')
+  } catch (e) {
+    console.error('[tauri] applyPetHitRects failed', e)
+  }
+}
+
 /** 显示/隐藏宠物窗口（visible 开关联动整个窗口） */
 export async function showPetWindow(): Promise<void> {
   if (!isTauri) return

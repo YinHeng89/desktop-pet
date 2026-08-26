@@ -2,6 +2,7 @@
 
 mod autostart;
 mod macos_pet;
+mod windows_pet;
 mod pet_import;
 mod notify_server;
 
@@ -199,6 +200,14 @@ fn main() {
                 }
             }
 
+            // Windows：安装透明区域鼠标穿透（SetWindowRgn 把窗口裁成可交互矩形）。
+            // 与 macOS 的 NSTimer 动态切换不同，Windows 用静态区域裁切，
+            // 由前端上报 rect 后调用 apply_pet_hit_rects 即时生效。
+            #[cfg(target_os = "windows")]
+            {
+                windows_pet::setup_notify_interactive(app.handle());
+            }
+
             // 托盘
             let menu = build_tray_menu(app.handle())?;
             let _tray = TrayIconBuilder::with_id("main-tray")
@@ -279,6 +288,8 @@ fn main() {
             open_settings_window,
             close_settings_window,
             macos_pet::set_notify_interactive_rects,
+            windows_pet::set_pet_hit_rects,
+            windows_pet::apply_pet_hit_rects,
             pet_import::import_pet,
             pet_import::list_imported_pets,
             pet_import::delete_imported_pet,
