@@ -393,7 +393,7 @@ function onRootMouseUp(): void {
         </svg>
         <span class="s-title">PetBuddy 设置</span>
       </span>
-      <button class="s-close" @click="onClose">×</button>
+      <button class="s-close" aria-label="关闭" @click="onClose"></button>
     </div>
 
     <div class="s-body">
@@ -516,7 +516,7 @@ function onRootMouseUp(): void {
               提供
             </span>
           </div>
-          <button class="s-close" @click="closeGallery">×</button>
+          <button class="s-close" aria-label="关闭" @click="closeGallery"></button>
         </div>
         <div class="s-gallery-search">
           <div class="s-gallery-search-wrap">
@@ -589,7 +589,7 @@ function onRootMouseUp(): void {
       <div class="s-modal">
         <div class="s-modal-head">
           <span class="s-modal-title">发送测试通知</span>
-          <button class="s-close" @click="closeNotifyModal">×</button>
+          <button class="s-close" aria-label="关闭" @click="closeNotifyModal"></button>
         </div>
         <div class="s-modal-body">
           <div class="s-field-label">通知内容</div>
@@ -636,7 +636,7 @@ function onRootMouseUp(): void {
       <div class="s-editpet">
         <div class="s-editpet-head">
           <span class="s-editpet-title">编辑宠物信息</span>
-          <button class="s-close" @click="closeEditPet">×</button>
+          <button class="s-close" aria-label="关闭" @click="closeEditPet"></button>
         </div>
         <div class="s-editpet-body">
           <label class="s-editpet-field">
@@ -729,12 +729,30 @@ function onRootMouseUp(): void {
   border: none;
   border-radius: 50%;
   background: transparent;
-  font-size: 20px;
-  line-height: 1;
   color: var(--muted);
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  /* 用两条旋转线画叉号，脱离字体度量，跨平台（尤其 Windows）精确居中，
+     避免文字 × 因字体基线偏移导致在 Windows 上明显偏下 */
+}
+.s-close::before,
+.s-close::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.s-close::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.s-close::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
 }
 .s-close:hover {
   background: var(--danger-soft);
