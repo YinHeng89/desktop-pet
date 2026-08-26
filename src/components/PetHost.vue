@@ -355,8 +355,10 @@ onUnmounted(() => {
   align-items: flex-end;
   pointer-events: none;
   --pet-scale: 1;
-  /* 容器宽度锁定为宠物真实宽度，气泡不再撑大容器，左右贴边距离恒定 */
-  width: var(--pet-w, 192px);
+  /* 容器最大宽度锁定为 280px（略宽于宠物真实宽度，给气泡两侧留出余量），
+     气泡通过 .pet-stage(relative) 内部 absolute 定位、相对画布居中，
+     不会撑大容器，左右贴边距离恒定 */
+  max-width: 280px;
   /* 禁止选中文字（气泡文字不可选中） */
   user-select: none;
   -webkit-user-select: none;

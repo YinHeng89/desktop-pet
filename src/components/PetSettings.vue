@@ -113,7 +113,7 @@ function sendNotify(): void {
 // 复制 curl 命令
 const CURL_TEXT = `curl -X POST http://127.0.0.1:8756/notify \\
   -H 'Content-Type: application/json' \\
-  -d '{"text":"下班啦！","action":"jump"}'`
+  -d '{"text":"下班啦！","action":"idle"}'`
 const curlCopied = ref(false)
 let curlCopiedTimer: ReturnType<typeof setTimeout> | null = null
 async function copyCurl(): Promise<void> {
@@ -470,7 +470,7 @@ function onRootMouseDown(e: MouseEvent): void {
             <div class="s-code-wrap">
               <pre class="s-code">curl -X POST http://127.0.0.1:8756/notify \
   -H 'Content-Type: application/json' \
-  -d '{"text":"下班啦！","action":"jump"}'</pre>
+  -d '{"text":"下班啦！","action":"idle"}'</pre>
               <button class="s-copy-btn" :class="{ copied: curlCopied }" @click="copyCurl">
                 {{ curlCopied ? '已复制' : '复制' }}
               </button>
