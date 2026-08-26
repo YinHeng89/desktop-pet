@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 宠物设置页（settings 窗口整页内容）。
 import { onMounted, onUnmounted, ref, computed } from 'vue'
+import { getVersion } from '@tauri-apps/api/app'
 import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, updateExternalPet, registerDownloadedPet, loadPetManifest, type PetDef } from '../store/pet'
 import { pushNotify } from '../store/notify'
 import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, preloadTauri, onEvent, type OnlinePetMeta } from '../tauri'
@@ -24,12 +25,18 @@ onMounted(() => {
   unlistenVisible = onEvent('pet-visible', (payload) => {
     petStore.visible = payload !== 'false' && payload !== false
   })
+
+  // 左侧底部版本号：读取 Tauri 打包时嵌入的版本（来自 tauri.conf.json）
+  getVersion().then((v) => { appVersion.value = v }).catch(() => {})
 })
 
 let unlistenVisible: (() => void) | null = null
 onUnmounted(() => {
   if (unlistenVisible) { unlistenVisible(); unlistenVisible = null }
 })
+
+// 设置界面左下角显示的版本号（来自 tauri.conf.json）
+const appVersion = ref('')
 
 function onSelect(id: string): void {
   setCurrentPet(id)
@@ -334,7 +341,23 @@ function onRootMouseDown(e: MouseEvent): void {
 <template>
   <div class="settings-root" @mousedown="onRootMouseDown">
     <div class="s-header">
-      <span class="s-title">PetBuddy 设置</span>
+      <span class="s-brand">
+        <svg class="s-brand-icon" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <defs>
+            <linearGradient id="brand-grad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="var(--primary, #3b6ef5)" />
+              <stop offset="100%" stop-color="#8a5cf6" />
+            </linearGradient>
+          </defs>
+          <path d="M5 14a7 7 0 0 1 14 0" stroke="url(#brand-grad)" />
+          <circle cx="9" cy="11.5" r="1" fill="url(#brand-grad)" stroke="none" />
+          <circle cx="15" cy="11.5" r="1" fill="url(#brand-grad)" stroke="none" />
+          <path d="M9.5 16c1 .8 4 .8 5 0" stroke="url(#brand-grad)" />
+          <path d="M12 3.5c-.6-1-.2-2 .8-2s1.4.9.8 1.8" stroke="url(#brand-grad)" />
+          <path d="M9 4c-.5-1 .2-2 1.1-1.8.6.1.7 1 .3 1.8" stroke="url(#brand-grad)" />
+        </svg>
+        <span class="s-title">PetBuddy 设置</span>
+      </span>
       <button class="s-close" @click="onClose">×</button>
     </div>
 
@@ -374,6 +397,9 @@ function onRootMouseDown(e: MouseEvent): void {
           </label>
           <button class="s-test-btn" @click="openNotifyModal">测试通知</button>
         </div>
+
+        <!-- 左下角版本号 -->
+        <div class="s-version">PetBuddy v{{ appVersion || '…' }}</div>
       </div>
 
       <!-- 右侧：宠物列表 + 添加 -->
@@ -636,10 +662,27 @@ function onRootMouseDown(e: MouseEvent): void {
   user-select: none;
   -webkit-user-select: none;
 }
+.s-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.s-brand-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  /* SVG 自带渐变描边/填充，外部仅加柔光 */
+  filter: drop-shadow(0 1px 3px rgba(59, 110, 245, 0.35));
+}
 .s-title {
   font-size: 16px;
   font-weight: 700;
-  color: var(--text);
+  letter-spacing: 0.4px;
+  background: linear-gradient(135deg, var(--primary, #3b6ef5), #8a5cf6);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 1px 2px rgba(59, 110, 245, 0.18));
 }
 .s-close {
   width: 28px;
@@ -826,6 +869,33 @@ function onRootMouseDown(e: MouseEvent): void {
 }
 .s-test-btn:active {
   transform: scale(0.97);
+}
+.s-version {
+  margin-top: auto;
+  padding-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 1px;
+  background: linear-gradient(135deg, var(--primary, #3b6ef5), #8a5cf6);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 1px 1px rgba(255, 255, 255, 0.25);
+  filter: drop-shadow(0 1px 2px rgba(59, 110, 245, 0.18));
+}
+/* 版本号前的小圆点，增强质感 */
+.s-version::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary, #3b6ef5), #8a5cf6);
+  box-shadow: 0 0 6px rgba(59, 110, 245, 0.55);
 }
 .s-list {
   flex: 1;
