@@ -14,13 +14,23 @@ use std::net::TcpListener;
 use tauri::Emitter;
 
 const PORT: u16 = 8756;
+/// 通知文本字数硬上限（中文按 1 字符计），超出拒绝并返回错误提示。
+const MAX_LEN: usize = 120;
 
 /// 前端直接调用：通过 Rust 广播通知给 main 窗口的宠物气泡。
 /// 走 Tauri IPC（invoke），绕过 HTTP/CORS，与 notify_server 广播同一事件名。
 #[tauri::command]
-pub fn push_notify(app: tauri::AppHandle, text: String, action: Option<String>, duration: Option<u64>) {
+pub fn push_notify(app: tauri::AppHandle, text: String, action: Option<String>, duration: Option<u64>) -> Result<(), String> {
     if text.is_empty() {
-        return;
+        return Err("通知文本不能为空".to_string());
+    }
+    // 字数硬限制：超过 MAX_LEN 个字符（中文按 1 字符计）拒绝，返回错误提示。
+    if text.chars().count() > MAX_LEN {
+        return Err(format!(
+            "通知文本超限：最多 {} 字，当前 {} 字",
+            MAX_LEN,
+            text.chars().count()
+        ));
     }
     let payload = serde_json::json!({
         "text": text,
@@ -28,6 +38,7 @@ pub fn push_notify(app: tauri::AppHandle, text: String, action: Option<String>, 
         "duration": duration,
     });
     let _ = app.emit("notify-push", payload);
+    Ok(())
 }
 
 /// 在 haystack 中查找 needle 子切片，返回起始偏移（找不到返回 None）。
@@ -135,6 +146,20 @@ fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> std::io::
 
     if text.is_empty() {
         let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(resp.as_bytes());
+        return Ok(());
+    }
+
+    // 字数硬限制：超过 MAX_LEN 个字符（中文按 1 字符计）拒绝，返回 JSON 错误提示，
+    // 调用方（curl/Python 等）可解析 error 字段拿到原因。
+    if text.chars().count() > MAX_LEN {
+        let msg = format!("通知文本超限：最多 {} 字，当前 {} 字", MAX_LEN, text.chars().count());
+        let body = serde_json::json!({ "ok": false, "error": msg }).to_string();
+        let resp = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.as_bytes().len(),
+            body
+        );
         let _ = stream.write_all(resp.as_bytes());
         return Ok(());
     }

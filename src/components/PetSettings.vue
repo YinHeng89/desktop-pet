@@ -96,18 +96,25 @@ function onToggleVisible(e: Event): void {
 // ── 测试通知弹窗（自定义内容）──
 const notifyModalOpen = ref(false)
 const notifyText = ref('')
+const notifyError = ref('')
 function openNotifyModal(): void {
   notifyText.value = ''
+  notifyError.value = ''
   notifyModalOpen.value = true
 }
 function closeNotifyModal(): void {
   notifyModalOpen.value = false
 }
-function sendNotify(): void {
+async function sendNotify(): Promise<void> {
   const text = notifyText.value.trim()
   if (!text) return
-  pushNotify(text)
-  closeNotifyModal()
+  try {
+    await pushNotify(text)
+    closeNotifyModal()
+  } catch (e) {
+    // 后端字数硬限制等错误透传到这里（invoke reject）
+    notifyError.value = (e as Error)?.message || String(e)
+  }
 }
 
 // 复制 curl 命令
@@ -462,6 +469,7 @@ function onRootMouseDown(e: MouseEvent): void {
               @keydown.ctrl.enter="sendNotify"
             />
             <div class="s-char-count">{{ notifyText.length }}/120</div>
+            <div v-if="notifyError" class="s-char-error">{{ notifyError }}</div>
           </div>
 
           <div class="s-field-label s-tips-label">调用教程</div>
@@ -912,6 +920,12 @@ function onRootMouseDown(e: MouseEvent): void {
   color: var(--muted);
   pointer-events: none;
   user-select: none;
+}
+.s-char-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #e5484d;
+  line-height: 1.4;
 }
 .s-modal-tips {
   margin-top: 8px;
