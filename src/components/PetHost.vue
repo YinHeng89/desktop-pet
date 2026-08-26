@@ -431,12 +431,18 @@ onUnmounted(() => {
         ref="bubbleEl"
         class="bubble"
         @mousedown="onPetMouseDown"
+        @transitionend="onBubbleTransitionEnd"
       >
         <div class="bubble-scroll"><span class="bubble-text">{{ currentNotify.text }}</span></div>
       </div>
     </Transition>
     <Transition name="bubble" mode="out-in">
-      <div v-if="chatText && !currentNotify" ref="bubbleEl" class="bubble chat-bubble">
+      <div
+        v-if="chatText && !currentNotify"
+        ref="bubbleEl"
+        class="bubble chat-bubble"
+        @transitionend="onBubbleTransitionEnd"
+      >
         <span class="bubble-text">{{ chatText }}</span>
       </div>
     </Transition>
@@ -564,29 +570,5 @@ onUnmounted(() => {
   transform: translateY(6px) scale(0.98);
   opacity: 0;
 }
-
-
-<Transition name="bubble" mode="out-in">
-  <div
-    v-if="currentNotify"
-    :key="currentNotify.id"
-    ref="bubbleEl"
-    class="bubble"
-    @mousedown="onPetMouseDown"
-    @transitionend="onBubbleTransitionEnd"
-  >
-    <div class="bubble-scroll"><span class="bubble-text">{{ currentNotify.text }}</span></div>
-  </div>
-</Transition>
-<Transition name="bubble" mode="out-in">
-  <div
-    v-if="chatText && !currentNotify"
-    ref="bubbleEl"
-    class="bubble chat-bubble"
-    @transitionend="onBubbleTransitionEnd"
-  >
-    <span class="bubble-text">{{ chatText }}</span>
-  </div>
-</Transition>
 
 </style>
