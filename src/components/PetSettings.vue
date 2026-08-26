@@ -22,8 +22,10 @@ onMounted(() => {
   document.addEventListener('contextmenu', (e) => e.preventDefault())
 
   // 同步：托盘 / main 窗口切换「显示宠物」后，本设置窗口的开关也实时更新（修复只发不收的失同步）
-  unlistenVisible = onEvent('pet-visible', (payload) => {
+  onEvent('pet-visible', (payload) => {
     petStore.visible = payload !== 'false' && payload !== false
+  }).then((u) => {
+    unlistenVisible = u
   })
 
   // 左侧底部版本号：读取 Tauri 打包时嵌入的版本（来自 tauri.conf.json）
@@ -325,16 +327,49 @@ function onClose(): void {
   void closeSettingsWindow()
 }
 
-// 拖动窗口（Tauri v2 用 startDragging API，必须在 mousedown 内同步调用）。
-// 绑在 .settings-root 上，包含 header 与 root 的 padding 区域，使整页背景都可拖。
-// 跳过交互元素，避免拖动吞掉点击/拖动滑块等手势。
+// 拖动窗口（Tauri v2 用 startDragging API）。
+// 绑在整页 .settings-root 上，任意空白处都可拖（含顶部 16px padding 带）。
+// 关键：不在 mousedown 内同步 startDragging（Windows 上会吞掉 click，导致列表项/开关点不动），
+// 而是「鼠标移动超过阈值才真正拖拽」——与 PetHost 的阈值机制一致。
+// 命中交互元素（按钮/输入框/滑块/卡片等）不启动拖拽，保证点击/滑动不被吞。
+const DRAG_THRESHOLD_PX = 5
+let sDragStartX = 0
+let sDragStartY = 0
+let sDragMoved = false
+let sDragging = false
+
 function onRootMouseDown(e: MouseEvent): void {
-  const target = e.target as HTMLElement
-  // 仅响应主鼠标按键
   if (e.button !== 0) return
-  // 命中以下交互元素则不启动窗口拖拽
-  if (target.closest('button, a, input, textarea, select, .s-slider, .s-card, .s-gallery-card')) return
-  void startDragging()
+  const target = e.target as HTMLElement
+  // 交互元素不启动窗口拖拽
+  if (target.closest('button, a, input, textarea, select, .s-slider, .s-card, .s-gallery-card, .s-item, .s-toggle, .s-modal, .s-editpet, .s-gallery')) {
+    return
+  }
+  sDragging = true
+  sDragMoved = false
+  sDragStartX = e.clientX
+  sDragStartY = e.clientY
+  window.addEventListener('mousemove', onRootDragMove)
+  window.addEventListener('mouseup', onRootMouseUp)
+}
+
+function onRootDragMove(e: MouseEvent): void {
+  if (!sDragging) return
+  const dx = e.clientX - sDragStartX
+  const dy = e.clientY - sDragStartY
+  if (!sDragMoved && Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) {
+    return
+  }
+  if (!sDragMoved) {
+    sDragMoved = true
+    void startDragging()
+  }
+}
+
+function onRootMouseUp(): void {
+  sDragging = false
+  window.removeEventListener('mousemove', onRootDragMove)
+  window.removeEventListener('mouseup', onRootMouseUp)
 }
 </script>
 
@@ -645,9 +680,11 @@ function onRootMouseDown(e: MouseEvent): void {
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  padding: 16px 20px 20px;
-  /* 无边框透明窗口：CSS 自绘圆角 */
-  border-radius: 14px;
+  /* 左右下留边距给内容；顶部 padding 改为 0，避免「16px 直角背景带顶到圆角切口」的观感冲突。
+     顶部留白由 .s-header 的 margin-top 提供，根节点顶部直接是圆角切口。 */
+  padding: 0 20px 20px;
+  /* 无边框透明窗口：CSS 自绘圆角（与气泡统一用 --radius-window，保证两端圆角一致） */
+  border-radius: var(--radius-window);
   overflow: hidden;
   /* 禁止选中文字（避免拖动缩放滑块时误选中文本） */
   user-select: none;
@@ -657,6 +694,7 @@ function onRootMouseDown(e: MouseEvent): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-top: 14px;
   margin-bottom: 14px;
   flex-shrink: 0;
   user-select: none;
@@ -1049,6 +1087,9 @@ function onRootMouseDown(e: MouseEvent): void {
   align-items: center;
   justify-content: center;
   z-index: 50;
+  /* 跟随窗口圆角（同 .s-modal-mask），避免深色蒙版溢出圆角外 */
+  border-radius: var(--radius-window);
+  overflow: hidden;
 }
 .s-modal-mask {
   position: absolute;
@@ -1058,6 +1099,10 @@ function onRootMouseDown(e: MouseEvent): void {
   align-items: center;
   justify-content: center;
   z-index: 60;
+  /* 跟随窗口圆角：蒙版本身是直角矩形铺满根，加上圆角+裁切后四角与窗口一致，
+     避免半透明深色溢出到圆角外的透明区域（「蒙版遮挡四角」问题）。 */
+  border-radius: var(--radius-window);
+  overflow: hidden;
 }
 .s-modal {
   width: 92%;
@@ -1125,6 +1170,9 @@ function onRootMouseDown(e: MouseEvent): void {
   align-items: center;
   justify-content: center;
   z-index: 50;
+  /* 跟随窗口圆角（同 .s-modal-mask），避免深色蒙版溢出圆角外 */
+  border-radius: var(--radius-window);
+  overflow: hidden;
 }
 .s-editpet {
   width: 90%;
