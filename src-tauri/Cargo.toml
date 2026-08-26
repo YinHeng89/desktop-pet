@@ -34,6 +34,11 @@ objc2-foundation = "0.3"
 objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSApplication", "NSRunningApplication"] }
 objc2-service-management = { version = "0.3", features = ["SMAppService"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows 开机自启：写 HKCU\...\Run 注册表键（比 Startup 文件夹 .lnk 更可靠，
+# 且能在注册值时附加 --autostart 参数供程序区分「开机自启」与「手动启动」）。
+winreg = "0.52"
+
 [profile.release]
 panic = "abort"
 codegen-units = 4

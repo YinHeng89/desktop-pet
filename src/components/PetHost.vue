@@ -208,9 +208,14 @@ function reportInteractiveRects(): void {
 //
 // 修复：reportInteractiveRects() 本身仍保留、用于「尽快恢复可交互」的粗略上报；
 // 真正决定裁切边界的权威上报，交给动画确实结束之后（transitionend）再做一次，
-// 并加一个 340ms（0.3s 动画 + 40ms 余量）的兜底定时器，防止某些边缘情况下
-// transitionend 没有触发（比如元素在动画播放途中被 v-if 提前销毁、跳过了
-// transitionend 事件）。
+// 并加一个兜底定时器，防止某些边缘情况下 transitionend 没有触发（比如元素在动画
+// 播放途中被 v-if 提前销毁、跳过了 transitionend 事件）。
+//
+// 注意：兜底时长必须 < 气泡淡出动画时长（.bubble-leave-active 为 0.22s = 220ms）。
+// 气泡消失时节点会被 v-if 销毁，::after 箭头不会单独派发 transitionend，
+// 唯一能纠正「含气泡+箭头」命中矩形的就是该兜底定时器。若兜底(340ms)大于淡出(220ms)，
+// 会出现「本体先淡没、箭头因命中矩形仍包含它而晚消失 ~120ms」的错位（Windows 硬边
+// SetWindowRgn 下尤其明显）。故兜底取 200ms，确保权威纠正早于淡出完成，二者同步消失。
 let settleTimer: ReturnType<typeof setTimeout> | null = null
 
 async function reportInteractiveRectsSettled(): Promise<void> {
@@ -222,7 +227,7 @@ async function reportInteractiveRectsSettled(): Promise<void> {
   await nextTick()
   reportInteractiveRects()
   if (settleTimer) clearTimeout(settleTimer)
-  settleTimer = setTimeout(reportInteractiveRects, 340)
+  settleTimer = setTimeout(reportInteractiveRects, 200)
 }
 
 function onBubbleTransitionEnd(e: TransitionEvent): void {

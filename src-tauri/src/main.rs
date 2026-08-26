@@ -68,6 +68,12 @@ fn get_autostart() -> Result<bool, String> {
     autostart::is_enabled()
 }
 
+/// 检测本次启动是否来自开机自启（注册表 Run 键写入时附加了 --autostart 参数）。
+#[tauri::command]
+fn was_auto_started() -> bool {
+    std::env::args().any(|a| a == "--autostart")
+}
+
 /// 前端通用跨窗口广播：invoke 后由 Rust app.emit 广播到所有窗口。
 /// 用于 pet-switch / pet-scale / pet-visible 等前端→前端事件，
 /// 规避前端 emit 跨窗口不生效的问题（走 IPC 更可靠）。
@@ -242,7 +248,24 @@ fn main() {
             // 由前端上报 rect 后调用 apply_pet_hit_rects 即时生效。
             #[cfg(target_os = "windows")]
             {
-                windows_pet::setup_notify_interactive(app.handle());
+                if let Some(w) = app.get_webview_window("main") {
+                    // 初始定位：钉到屏幕右下角，避开任务栏。
+                    // Windows 无 Dock，但有底部任务栏（Win11 约 48px 高），
+                    // 用 64px 底边距 + 24px 右边距兜底，避免宠物被任务栏遮住。
+                    if let Ok(monitor) = w.current_monitor() {
+                        if let Some(mon) = monitor {
+                            let size = mon.size();
+                            let scale = mon.scale_factor();
+                            let ww = 320.0;
+                            let wh = 380.0;
+                            let x = (size.width as f64 / scale) - ww - 24.0;
+                            let y = (size.height as f64 / scale) - wh - 64.0;
+                            let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
+                            let _ = w.set_position(tauri::LogicalPosition::new(x, y));
+                        }
+                    }
+                    windows_pet::setup_notify_interactive(app.handle());
+                }
             }
 
             // 托盘
@@ -327,6 +350,7 @@ fn main() {
             open_external,
             set_autostart,
             get_autostart,
+            was_auto_started,
             broadcast_event,
             resize_pet_window,
             open_settings_window,

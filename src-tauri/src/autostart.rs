@@ -7,10 +7,11 @@
 //!   注意：SMAppService 要求应用是已打包的 .app（位于 /Applications 或有效 bundle），
 //!   dev 模式（target/debug 裸二进制）无法注册。
 //!
-//! - Windows：在用户「启动」文件夹（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`）
-//!   写入 / 删除一个指向当前 exe 的 `.lnk` 快捷方式。这是 Windows 下最稳、零额外依赖
-//!   的开机自启方案（无需注册表、无需 COM 提升权限）。`.lnk` 用纯二进制手写 Shell Link
-//!   格式（最小可用子集：LinkTargetIDList + Unicode 字符串数据块），不依赖任何第三方库。
+//! - Windows：通过 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 注册表键注册 /
+//!   注销（currentUser 安装模式下 exe 位于用户可写目录，AB 更新不改变路径，Run 键只需
+//!   首次注册一次即可永久生效）。注册值为当前 exe 完整路径 + `--autostart` 参数，
+//!   供程序区分「开机自启」与「手动启动」。相比 Startup 文件夹 `.lnk` 方案，注册表方案
+//!   更可靠（不会被误删、不依赖 Shell Link 解析），且与 worktrack 桌面端保持一致。
 //!
 //! - 其它平台：暂未实现（返回未启用）。
 
@@ -48,115 +49,66 @@ mod imp {
 
 #[cfg(target_os = "windows")]
 mod imp {
-    use std::env;
-    use std::fs;
-    use std::path::PathBuf;
+    use winreg::enums::*;
+    use winreg::RegKey;
 
-    /// 启动项快捷方式文件名（位于用户 Startup 文件夹）。
-    const LNK_NAME: &str = "PetBuddy.lnk";
+    /// 注册表 Run 键值名。
+    const RUN_VALUE: &str = "PetBuddy";
 
-    /// 用户「启动」文件夹下的 `.lnk` 完整路径。
-    /// Windows 开机登录后会自动枚举该目录并执行其中所有快捷方式。
-    fn startup_lnk_path() -> Option<PathBuf> {
-        let appdata = env::var("APPDATA").ok()?;
-        Some(
-            PathBuf::from(appdata)
-                .join("Microsoft")
-                .join("Windows")
-                .join("Start Menu")
-                .join("Programs")
-                .join("Startup")
-                .join(LNK_NAME),
-        )
-    }
-
+    /// 注册开机自启（HKCU Run 键）。
+    ///
+    /// 写入 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\PetBuddy`
+    /// 值为当前 exe 的完整路径（含引号）+ `--autostart` 标记。
     pub fn enable() -> Result<(), String> {
-        // 当前 exe 绝对路径（打包后为 .exe，dev 模式为 debug 二进制）
-        let exe = env::current_exe().map_err(|e| format!("取当前 exe 路径失败: {e}"))?;
-        let target = exe.to_string_lossy().to_string();
-        // 工作目录：用当前进程目录，避免从 Startup 启动时 cwd 异常
-        let cwd = env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let exe = std::env::current_exe().map_err(|e| format!("获取 exe 路径失败: {e}"))?;
+        let exe_str = exe
+            .to_str()
+            .ok_or_else(|| "exe 路径含非 UTF-8 字符".to_string())?;
 
-        let path = startup_lnk_path().ok_or("取 Startup 目录失败（APPDATA 未设置）")?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("创建 Startup 目录失败: {e}"))?;
-        }
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (run_key, _) = hkcu
+            .create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run")
+            .map_err(|e| format!("打开 Run 键失败: {e}"))?;
 
-        let bytes = build_lnk(&target, &cwd);
-        fs::write(&path, bytes).map_err(|e| format!("写入快捷方式失败: {e}"))?;
+        // 双引号包裹路径，附加 --autostart 标记供程序区分开机自启 / 手动启动
+        let value = format!("\"{exe_str}\" --autostart");
+        run_key
+            .set_value(RUN_VALUE, &value)
+            .map_err(|e| format!("写入 Run 键失败: {e}"))?;
+
         Ok(())
     }
 
+    /// 取消开机自启（删除 Run 键值）。
     pub fn disable() -> Result<(), String> {
-        if let Some(path) = startup_lnk_path() {
-            if path.exists() {
-                fs::remove_file(&path).map_err(|e| format!("删除快捷方式失败: {e}"))?;
-            }
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let run_key = hkcu
+            .open_subkey_with_flags(
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                KEY_READ | KEY_WRITE,
+            )
+            .map_err(|e| format!("打开 Run 键失败: {e}"))?;
+
+        // 值不存在也视为成功（幂等）
+        match run_key.delete_value(RUN_VALUE) {
+            Ok(()) => Ok(()),
+            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("删除 Run 键失败: {e}")),
         }
-        Ok(())
     }
 
+    /// 查询是否已注册开机自启。
     pub fn is_enabled() -> Result<bool, String> {
-        Ok(startup_lnk_path().map(|p| p.exists()).unwrap_or(false))
-    }
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let run_key = hkcu
+            .open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Run", KEY_READ)
+            .map_err(|e| format!("打开 Run 键失败: {e}"))?;
 
-    /// 手写最小可用 Shell Link（.lnk）二进制：
-    /// ShellLinkHeader + LinkTargetIDList（最小 My Computer 根项）+ Unicode 字符串数据块。
-    /// 目标路径 / 工作目录 / 参数全部走字符串数据块，无需 COM / IShellLink。
-    fn build_lnk(target: &str, cwd: &str) -> Vec<u8> {
-        let mut out = Vec::with_capacity(512);
-
-        // ── ShellLinkHeader（76 字节）──
-        out.extend_from_slice(&0x0000_004C_u32.to_le_bytes()); // HeaderSize = 76
-        // LinkCLSID = {00021401-0000-0000-C000-000000000046}
-        out.extend_from_slice(&[
-            0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x46,
-        ]);
-        // LinkFlags：HasLinkTargetIDList | HasName | HasWorkingDir | HasArguments | IsUnicode
-        let flags: u32 = 0x01 | 0x02 | 0x10 | 0x20 | 0x80;
-        out.extend_from_slice(&flags.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes()); // FileAttributes
-        out.extend_from_slice(&[0u8; 8]); // CreationTime
-        out.extend_from_slice(&[0u8; 8]); // AccessTime
-        out.extend_from_slice(&[0u8; 8]); // WriteTime
-        out.extend_from_slice(&0u32.to_le_bytes()); // FileSize
-        out.extend_from_slice(&0i32.to_le_bytes()); // IconIndex
-        out.extend_from_slice(&1u32.to_le_bytes()); // ShowCommand = SW_SHOWNORMAL
-        out.extend_from_slice(&0u16.to_le_bytes()); // HotKey
-        out.extend_from_slice(&0u16.to_le_bytes()); // Reserved1
-        out.extend_from_slice(&0u32.to_le_bytes()); // Reserved2
-        out.extend_from_slice(&0u32.to_le_bytes()); // Reserved3
-
-        // ── LinkTargetIDList（最小可用：My Computer 根项 + 终止符）──
-        // IDListSize（后续 itemIDList 总字节数，含 2 字节终止符）= 20 + 2 = 22
-        out.extend_from_slice(&0x0016_u16.to_le_bytes());
-        // ItemID（size=20，data=18）：0x1F=根命名空间类型（My Computer）
-        out.extend_from_slice(&[
-            0x14, 0x00, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ]);
-        out.extend_from_slice(&[0x00, 0x00]); // IDList 终止符（空 ItemID）
-
-        // ── STRING_DATA（顺序：NAME → WORKING_DIR → ARGUMENTS）──
-        push_unicode_string(&mut out, target); // NAME（HasName）= 目标 exe
-        push_unicode_string(&mut out, cwd); // WORKING_DIR（HasWorkingDir）
-        push_unicode_string(&mut out, ""); // ARGUMENTS（HasArguments）
-
-        out
-    }
-
-    /// 写入一个 Unicode 字符串块：size(u16, 字符数含终止 null) + UTF-16LE 字节 + 终止 null。
-    fn push_unicode_string(buf: &mut Vec<u8>, s: &str) {
-        let utf16: Vec<u16> = s.encode_utf16().collect();
-        let count = (utf16.len() + 1) as u16; // 含终止 null 字符
-        buf.extend_from_slice(&count.to_le_bytes());
-        for c in &utf16 {
-            buf.extend_from_slice(&c.to_le_bytes());
+        match run_key.get_value::<String, _>(RUN_VALUE) {
+            Ok(_) => Ok(true),
+            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(format!("读取 Run 键失败: {e}")),
         }
-        buf.extend_from_slice(&0u16.to_le_bytes());
     }
 }
 

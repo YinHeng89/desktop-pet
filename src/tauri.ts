@@ -207,6 +207,18 @@ export async function getAutoStart(): Promise<boolean> {
   }
 }
 
+/** 检测本次启动是否来自开机自启（Run 键注册时附加的 --autostart 参数） */
+export async function wasAutoStarted(): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return (await invoke<boolean>('was_auto_started')) ?? false
+  } catch (e) {
+    console.error('[tauri] wasAutoStarted failed', e)
+    return false
+  }
+}
+
 // ── 在线画廊（awesome-codex-pet）──
 
 export interface OnlinePetMeta {
