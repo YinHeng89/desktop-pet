@@ -675,19 +675,29 @@ function onRootMouseUp(): void {
 
 <style scoped>
 .settings-root {
+  position: relative;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  /* 左右下留边距给内容；顶部 padding 改为 0，避免「16px 直角背景带顶到圆角切口」的观感冲突。
-     顶部留白由 .s-header 的 margin-top 提供，根节点顶部直接是圆角切口。 */
-  padding: 0 20px 20px;
-  /* 无边框透明窗口：CSS 自绘圆角（与气泡统一用 --radius-window，保证两端圆角一致） */
-  border-radius: var(--radius-window);
-  overflow: hidden;
+  /* 透明外层：四周留 20px 阴影呼吸区（落在窗口矩形内，不会被 SetWindowRgn 裁掉）。
+     真正的背景+圆角+投影交给 ::before 伪元素绘制，这样窗口级 region 裁切后仍可见阴影。 */
+  background: transparent;
+  padding: 20px;
   /* 禁止选中文字（避免拖动缩放滑块时误选中文本） */
   user-select: none;
   -webkit-user-select: none;
+}
+/* 真正的卡片背景层：背景 + 圆角 + 投影。
+   投影落在 .settings-root 的 20px padding 区内（窗口矩形内），故不被 region 裁切，
+   视觉上恢复设置窗的悬浮阴影。z-index:-1 让真实内容(header/body)浮在卡片之上。 */
+.settings-root::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  border-radius: var(--radius-window);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.28), 0 4px 12px rgba(15, 23, 42, 0.18);
+  z-index: -1;
 }
 .s-header {
   display: flex;
