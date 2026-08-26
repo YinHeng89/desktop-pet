@@ -304,8 +304,14 @@ watch(
   () => petStore.visible,
   (v) => {
     if (!isTauri) return
-    if (v) void showPetWindow()
-    else void hidePetWindow()
+    if (v) {
+      void showPetWindow()
+      // Windows：窗口从 hide 恢复后 SetWindowRgn 的 region 可能失效，
+      // 需重新把当前命中矩形应用到窗口，否则会露出系统窗口边框/矩形轮廓。
+      void applyPetHitRects()
+    } else {
+      void hidePetWindow()
+    }
   },
 )
 
@@ -399,7 +405,7 @@ onUnmounted(() => {
       </div>
     </Transition>
     <Transition name="bubble" mode="out-in">
-      <div v-if="chatText && !currentNotify" class="bubble chat-bubble">
+      <div v-if="chatText && !currentNotify" ref="bubbleEl" class="bubble chat-bubble">
         <span class="bubble-text">{{ chatText }}</span>
       </div>
     </Transition>
@@ -458,6 +464,10 @@ onUnmounted(() => {
   box-shadow:
     0 6px 18px rgba(15, 23, 42, 0.16),
     0 2px 6px rgba(15, 23, 42, 0.1);
+  /* 文字垂直居中（跨 webview 一致，修复 Windows WebView2 下通知气泡文字偏上） */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 .bubble::after {
   content: '';
@@ -478,6 +488,10 @@ onUnmounted(() => {
   /* 隐藏滚动条视觉（仍保留滚轮/触摸滚动能力），避免单行文本因亚像素误判而显示滚动条 */
   scrollbar-width: none;
   -ms-overflow-style: none;
+  /* 文字垂直居中（配合 .bubble 的 flex，保证单行/多行都居中，不偏上） */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 .bubble-scroll::-webkit-scrollbar {
   display: none;
