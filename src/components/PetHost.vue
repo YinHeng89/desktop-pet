@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { isTauri, onEvent, setNotifyInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow } from '../tauri'
-import { petStore, currentPet, openPetPicker, setPetVisible, loadPetManifest } from '../store/pet'
+import { petStore, currentPet, openPetPicker, setPetVisible, loadPetManifest, MIN_SCALE, MAX_SCALE } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
 import SpritePet from './SpritePet.vue'
@@ -447,7 +447,7 @@ onMounted(async () => {
     // 设置窗口同步缩放（settings 窗口改缩放 → 实时生效）
     onEvent('pet-scale', (payload) => {
       const s = Number(payload)
-      if (Number.isFinite(s) && s >= 0.8 && s <= 1.3) {
+      if (Number.isFinite(s) && s >= MIN_SCALE && s <= MAX_SCALE) {
         petStore.scale = s
         // 窗口跟随缩放：气泡+宠物一起放大，需同步调整窗口尺寸
         void resizePetWindow(s)
