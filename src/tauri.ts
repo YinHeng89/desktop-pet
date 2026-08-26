@@ -65,6 +65,21 @@ export async function onEvent(
   return () => un()
 }
 
+/** 监听当前窗口的 Moved 事件（系统级拖拽时高频触发，可用于 debounce 兜底结束拖拽）。
+ *  返回取消监听函数。非 Tauri 环境返回空函数。 */
+export async function onWindowMoved(
+  handler: () => void,
+): Promise<() => void> {
+  if (!isTauri || !windowApi) return () => {}
+  try {
+    const un = await windowApi.getCurrentWindow().onMoved(() => handler())
+    return () => un()
+  } catch (e) {
+    console.error('[tauri] onWindowMoved failed', e)
+    return () => {}
+  }
+}
+
 /** 跨窗口广播事件（前端 → 前端，如设置窗口改缩放/显隐/切换宠物同步给 main 窗口）。
  *  走 Rust command broadcast_event（invoke → app.emit），规避前端 emit 跨窗口不生效的问题。 */
 export async function emitEvent(event: string, payload: unknown = undefined): Promise<void> {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
-import { isTauri, onEvent, setNotifyInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow } from '../tauri'
+import { isTauri, onEvent, setNotifyInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow, onWindowMoved } from '../tauri'
 import { petStore, currentPet, openPetPicker, setPetVisible, loadPetManifest, MIN_SCALE, MAX_SCALE } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
@@ -197,8 +197,10 @@ function reportInteractiveRects(): void {
   //   取较大值 24px 做基准；箭头额外溢出 9px 已被这圈阴影外扩覆盖，无需单独补。
   // .pet-stage 的 drop-shadow(0 4px 8px)：下方最大约 4+8=12px，同样四周外扩。
   // 四向都外扩，避免只补下方而漏掉阴影模糊在左右/上方的少量扩散。
-  const bubbleShadowPad = 24 * scale
-  const petShadowPad = 12 * scale
+  // 阴影/模糊核实际扩散范围比 CSS 理论值更大，保守放宽避免 region 把阴影硬裁掉。
+  // region 大一点只是多了少量可交互区域，不会裁掉视觉；裁小了才会露馅。
+  const bubbleShadowPad = 28 * scale
+  const petShadowPad = 16 * scale
 
   // 优先用当前挂载的气泡 ref；ref 已解绑（正在离场动画中）时，
   // 退回 onBubbleLeave 缓存的最后一次完整矩形，避免动画播放期间
@@ -301,6 +303,11 @@ let dragStartX = 0
 let dragStartY = 0
 let dragDirLocked = false // 本次拖拽是否已经判定过方向（判定后不再频繁切换，避免抖动闪烁）
 let dragStartedOs = false // 是否已经调用过系统级 startDragging（只调一次）
+// Windows 系统拖拽兜底：startDragging 后 OS 接管，mouseup 可能被吞导致 dragging 卡 true。
+// 改用窗口 Moved 事件 debounce 兜底（窗口停止移动 ~180ms 即认为拖拽结束），即使
+// mouseup 收不到也能恢复 dragging=false，避免下一次单击被 if(dragMoved) return 误吞。
+let dragMovedTimer: ReturnType<typeof setTimeout> | null = null
+let unlistenWindowMoved: (() => void) | null = null
 
 function onPetMouseDown(e: MouseEvent): void {
   // 双击兜底：Windows 上 startDragging 会吞掉 dblclick，这里用 mousedown 的 detail 直接拦截
@@ -355,6 +362,17 @@ function onPetDragMove(e: MouseEvent): void {
   // Windows 上可能不再派发——但方向已经在上面预判好了，不影响跑步动作展示。
   if (!dragStartedOs) {
     dragStartedOs = true
+    // 注册窗口 Moved 兜底：系统拖拽期间窗口会高频触发 Moved，停手后约 180ms 不再移动
+    // 即判定拖拽结束（Windows 上 mouseup 可能被 OS 吞掉，必须靠这个兜底恢复状态）。
+    void onWindowMoved(() => {
+      if (dragMovedTimer) clearTimeout(dragMovedTimer)
+      dragMovedTimer = setTimeout(() => {
+        dragMovedTimer = null
+        if (dragging) stopDragging()
+      }, 180)
+    }).then((un) => {
+      unlistenWindowMoved = un
+    })
     void startDragging()
   }
 }
@@ -366,6 +384,15 @@ function stopDragging(): void {
   dragDirLocked = false
   window.removeEventListener('mousemove', onPetDragMove)
   window.removeEventListener('mouseup', onGlobalMouseUp)
+  // 清理 Windows 系统拖拽兜底监听与 timer（避免 mouseup 被吞时的残留触发）
+  if (dragMovedTimer) {
+    clearTimeout(dragMovedTimer)
+    dragMovedTimer = null
+  }
+  if (unlistenWindowMoved) {
+    unlistenWindowMoved()
+    unlistenWindowMoved = null
+  }
   if (wasDirLocked) {
     if (petState.value === 'runningLeft' || petState.value === 'runningRight') {
       petState.value = 'idle'
@@ -492,6 +519,8 @@ onUnmounted(() => {
   if (randomTimer) clearTimeout(randomTimer)
   if (chatTimer) clearTimeout(chatTimer)
   if (settleTimer) clearTimeout(settleTimer)
+  if (dragMovedTimer) clearTimeout(dragMovedTimer)
+  if (unlistenWindowMoved) unlistenWindowMoved()
   window.removeEventListener('mouseup', onGlobalMouseUp)
   window.removeEventListener('mousemove', onPetDragMove)
 })
@@ -565,6 +594,10 @@ onUnmounted(() => {
 .bubble {
   pointer-events: auto;
   position: relative;
+  /* 气泡横向偏移变量：通知气泡默认 0（无偏移），搭话气泡 .chat-bubble 覆写为 -20px。
+     抽成变量是为了让 enter/leave 动画在保留该偏移的同时叠加 translateY/scale，
+     避免 .bubble-enter-from 的 transform 整体覆盖掉 translateX 导致入场横向跳变。 */
+  --bubble-x: 0px;
   /* 宽度随文字自适应（不撑满、无最小限制），居中，最大 300px；
      与搭话气泡统一：短文字就短，长文字最多 300px，下箭头始终对准宠物中心 */
   width: fit-content;
@@ -625,13 +658,16 @@ onUnmounted(() => {
 .chat-bubble {
   /* 完全继承 .bubble 的 padding/background/border/border-radius/box-shadow/font-size，
      保证搭话气泡与通知气泡视觉完全统一（WebView2 下两种气泡尺寸/字号/圆角一致）。
-     仅保留位置偏移 transform（整体往左移 20px，让箭头对齐宠物中心偏左的嘴部）。 */
+     仅保留位置偏移 transform（整体往左移 20px，让箭头对齐宠物中心偏左的嘴部）。
+     偏移抽成 --bubble-x 变量：enter/leave 动画需在此基础上叠加 translateY/scale，
+     否则 .bubble-enter-from 的 transform 会整体覆盖掉 translateX，动画结束瞬间横向跳变。 */
   pointer-events: auto;
   position: relative;
   width: fit-content;
   margin-left: auto;
   margin-right: auto;
-  transform: translateX(calc(-20px * var(--pet-scale)));
+  --bubble-x: calc(-20px * var(--pet-scale));
+  transform: translateX(var(--bubble-x));
   max-width: calc(300px * var(--pet-scale));
 }
 
@@ -642,11 +678,12 @@ onUnmounted(() => {
   transition: all 0.22s cubic-bezier(0.55, 0, 1, 0.45);
 }
 .bubble-enter-from {
-  transform: translateY(10px) scale(0.96);
+  /* 保留 --bubble-x 横向偏移，再叠加入场位移/缩放，避免覆盖丢失导致跳变 */
+  transform: translateX(var(--bubble-x)) translateY(10px) scale(0.96);
   opacity: 0;
 }
 .bubble-leave-to {
-  transform: translateY(6px) scale(0.98);
+  transform: translateX(var(--bubble-x)) translateY(6px) scale(0.98);
   opacity: 0;
 }
 
