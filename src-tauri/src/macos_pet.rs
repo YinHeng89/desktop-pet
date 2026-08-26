@@ -162,13 +162,8 @@ mod macos_impl {
 }
 
 /// 对外入口：notify 窗口创建后调用。
+/// 仅在 macOS 编译（Windows 走 windows_pet 模块，main.rs 的 mac 分支才调用本函数）。
+#[cfg(target_os = "macos")]
 pub fn setup_notify_interactive(app: &tauri::AppHandle) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = macos_impl::install(app);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = app;
-    }
+    let _ = macos_impl::install(app);
 }
