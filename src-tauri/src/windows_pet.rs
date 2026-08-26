@@ -157,15 +157,18 @@ pub fn setup_window_rounded_corners(hwnd: isize) {
 
     // 圆角半径 = 14px × DPI 缩放(逻辑像素→物理像素)，与 CSS --radius-window 对齐
     let scale = window_dpi_scale(hwnd);
-    let radius = (WINDOW_CORNER_RADIUS as f64 * scale).round() as i32;
+    let mut radius = (WINDOW_CORNER_RADIUS as f64 * scale).round() as i32;
     // 半径不能超过短边一半，否则 CreateRoundRectRgn 行为异常
-    let radius = radius.min(w / 2).min(h / 2).max(0);
+    radius = radius.min(w / 2).min(h / 2).max(0);
+    // CreateRoundRectRgn 最后两个参数是「圆角椭圆的宽/高」(=直径)，不是 CSS 的边框半径。
+    // 传 radius 会让实际圆角只有一半(7px)，必须 ×2 才等于 CSS 的 border-radius:14px。
+    let diameter = radius.saturating_mul(2);
 
     unsafe {
         // 注意：SetWindowRgn 的 region 坐标是**相对窗口客户区左上角(0,0)**，
         // 不能用 GetWindowRect 的屏幕绝对坐标(rect.left/top)，否则窗口左上角
         // 会被裁成透明，导致整窗"打不开/空白"。必须用 (0,0,w,h)。
-        let rgn = CreateRoundRectRgn(0, 0, w, h, radius, radius);
+        let rgn = CreateRoundRectRgn(0, 0, w, h, diameter, diameter);
         if rgn == 0 {
             return;
         }
@@ -258,7 +261,10 @@ fn apply_hit_rects(hwnd: isize) -> bool {
         let r = ((x + w) * scale).round() as i32;
         let b = ((y + h) * scale).round() as i32;
         let radius = (WINDOW_CORNER_RADIUS as f64 * scale).round() as i32;
-        let rgn = unsafe { CreateRoundRectRgn(l, t, r, b, radius, radius) };
+        // CreateRoundRectRgn 最后两参数是椭圆宽/高(=直径)，非 CSS 半径；
+        // 必须 ×2 才能与 border-radius:14px 视觉一致。
+        let diameter = radius.saturating_mul(2);
+        let rgn = unsafe { CreateRoundRectRgn(l, t, r, b, diameter, diameter) };
         if rgn == 0 {
             continue;
         }
