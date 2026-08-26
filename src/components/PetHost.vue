@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
-import { isTauri, onEvent, setNotifyInteractiveRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow } from '../tauri'
+import { isTauri, onEvent, setNotifyInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow } from '../tauri'
 import { petStore, currentPet, openPetPicker, setPetVisible, loadPetManifest } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
@@ -168,7 +168,11 @@ function reportInteractiveRects(): void {
       rects.push([r.left, r.top, r.width, r.height])
     }
   }
+  // macOS：像素穿透用（NSTimer 轮询）
   void setNotifyInteractiveRects(rects)
+  // Windows：透明区域穿透用（SetWindowRgn 裁切，需显式 apply 即时生效）
+  void setPetHitRects(rects)
+  void applyPetHitRects()
 }
 
 // ── 宠物交互：拖动跑步 + 单击随机 + 双击设置 ──
@@ -187,23 +191,35 @@ function reportInteractiveRects(): void {
 const DRAG_DIRECTION_THRESHOLD_PX = 6
 
 let dragging = false
+let dragMoved = false // 本次按下是否真的产生了拖拽位移（用于区分单击/拖拽）
 let dragStartX = 0
 let dragStartY = 0
 let dragDirLocked = false // 本次拖拽是否已经判定过方向（判定后不再频繁切换，避免抖动闪烁）
+let dragStartedOs = false // 是否已经调用过系统级 startDragging（只调一次）
 
 function onPetMouseDown(e: MouseEvent): void {
+  // 双击兜底：Windows 上 startDragging 会吞掉 dblclick，这里用 mousedown 的 detail 直接拦截
+  if (e.detail === 2) {
+    openPetPicker()
+    return
+  }
   if (petState.value === 'talk') {
     void startDragging()
     return
   }
   dragging = true
+  dragMoved = false
   dragDirLocked = false
+  dragStartedOs = false
   dragStartX = e.clientX
   dragStartY = e.clientY
   window.addEventListener('mousemove', onPetDragMove)
-  // 原生窗口拖拽交给系统接管；我们自己的 mousemove 监听仍然能收到坐标用于方向判断，
-  // 两者互不冲突（startDragging 之后 mousemove 仍会派发到 window）。
-  void startDragging()
+  window.addEventListener('mouseup', onGlobalMouseUp)
+  // 注意：不再在 mousedown 内同步调用 startDragging()。
+  // macOS 上 mousedown 立即 startDragging 没问题，但在 Windows 上会吞掉后续
+  // 的 click / dblclick / mousemove，导致「单击搭话」「双击打开设置」「左右拖动方向」
+  // 全部失效。改为：真正移动超过阈值时（onPetDragMove）才调用系统拖拽，
+  // 这样不移动 = 纯点击（click/dblclick 正常派发），移动 = 拖拽。
 }
 
 function onPetDragMove(e: MouseEvent): void {
@@ -212,37 +228,51 @@ function onPetDragMove(e: MouseEvent): void {
   const dx = e.clientX - dragStartX
   const dy = e.clientY - dragStartY
 
-  if (dragDirLocked) return // 本次拖拽方向已确定，跑步动作播完前不再切换，避免来回抖动
-
+  // 位移未达阈值：可能是手抖或即将单击，先不判定、也不启动系统拖拽
   if (Math.abs(dx) < DRAG_DIRECTION_THRESHOLD_PX && Math.abs(dy) < DRAG_DIRECTION_THRESHOLD_PX) {
-    return // 位移还太小，可能只是手抖或即将单击，先不判定
+    return
   }
 
-  // 只在水平位移明显大于/接近垂直位移时才判定为“跑步方向”，避免纯粹上下拖拽也被当成跑步
-  if (Math.abs(dx) < Math.abs(dy)) return
+  // 首次超过阈值：标记已移动，并按当前水平方向预判跑步动作（早于系统拖拽接管，
+  // 避免 Windows 上 startDragging 之后 webview 收不到 mousemove 导致方向永远不更新）。
+  if (!dragMoved) {
+    dragMoved = true
+    if (!dragDirLocked && Math.abs(dx) >= Math.abs(dy)) {
+      const dir = dx < 0 ? 'runningLeft' : 'runningRight'
+      if (currentPet.value?.actions?.[dir]) {
+        dragDirLocked = true
+        petState.value = dir
+      }
+    }
+  }
 
-  const dir = dx < 0 ? 'runningLeft' : 'runningRight'
-  if (currentPet.value?.actions?.[dir]) {
-    dragDirLocked = true
-    petState.value = dir
+  // 启动系统级窗口拖拽（只调一次）。调用后 OS 接管移动，webview 的 mousemove 在
+  // Windows 上可能不再派发——但方向已经在上面预判好了，不影响跑步动作展示。
+  if (!dragStartedOs) {
+    dragStartedOs = true
+    void startDragging()
   }
 }
 
 function stopDragging(): void {
   if (!dragging) return
   dragging = false
+  const wasDirLocked = dragDirLocked
   dragDirLocked = false
   window.removeEventListener('mousemove', onPetDragMove)
-  if (petState.value === 'runningLeft' || petState.value === 'runningRight') {
-    petState.value = 'idle'
-    scheduleRandomAction()
+  window.removeEventListener('mouseup', onGlobalMouseUp)
+  if (wasDirLocked) {
+    if (petState.value === 'runningLeft' || petState.value === 'runningRight') {
+      petState.value = 'idle'
+      scheduleRandomAction()
+    }
   }
 }
 
 function onPetClick(): void {
-  // 说明：这里不再需要判断/清理 runTimer（已移除），拖拽状态由 dragging/dragDirLocked 管理。
-  // 只有「没有产生方向锁定的拖拽」才当作一次真正的单击，避免拖拽松手时被误判成单击触发随机动作。
-  if (dragDirLocked) return
+  // 只有「没有产生方向锁定的拖拽（即没有真正移动）」才当作一次真正的单击，
+  // 避免拖拽松手时被误判成单击触发随机动作（Windows 下拖拽也会派发 click）。
+  if (dragMoved) return
   if (petState.value !== 'talk') {
     const action = playRandomAction()
     if (action) showChat(action)
@@ -250,6 +280,8 @@ function onPetClick(): void {
 }
 
 function onPetDblClick(): void {
+  // 主路径：macOS 等 dblclick 正常派发的平台。
+  // Windows 兜底已在 onPetMouseDown(e.detail===2) 处理，这里直接调用即可（重复调用无害）。
   openPetPicker()
 }
 
@@ -323,7 +355,6 @@ onMounted(async () => {
   void reportInteractiveRects()
   setTimeout(reportInteractiveRects, 50)
   setTimeout(reportInteractiveRects, 150)
-  window.addEventListener('mouseup', onGlobalMouseUp)
   // 禁用右键菜单（透明无边框窗口，避免弹出 webview 默认菜单）
   document.addEventListener('contextmenu', (e) => e.preventDefault())
 
@@ -422,7 +453,8 @@ onUnmounted(() => {
   padding: calc(10px * var(--pet-scale)) calc(14px * var(--pet-scale));
   background: #fff;
   border: 0.5px solid rgba(15, 23, 42, 0.06);
-  border-radius: calc(14px * var(--pet-scale));
+  /* 固定 14px（与设置窗统一用 --radius-window），不随宠物缩放变化，保证两端圆角一致 */
+  border-radius: var(--radius-window);
   box-shadow:
     0 6px 18px rgba(15, 23, 42, 0.16),
     0 2px 6px rgba(15, 23, 42, 0.1);
@@ -473,7 +505,8 @@ onUnmounted(() => {
   padding: calc(7px * var(--pet-scale)) calc(12px * var(--pet-scale));
   background: #fff;
   border: 0.5px solid rgba(15, 23, 42, 0.06);
-  border-radius: calc(14px * var(--pet-scale));
+  /* 固定 14px（与设置窗统一用 --radius-window），保证两端圆角一致 */
+  border-radius: var(--radius-window);
   box-shadow:
     0 6px 18px rgba(15, 23, 42, 0.16),
     0 2px 6px rgba(15, 23, 42, 0.1);
