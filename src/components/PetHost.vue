@@ -146,7 +146,7 @@ function onPetLeave(): void {
   }
 }
 
-// ── macOS 像素穿透：上报可交互矩形 ──
+// ── Windows 像素穿透：上报可交互矩形 ──
 const petStageEl = ref<HTMLElement | null>(null)
 const bubbleEl = ref<HTMLElement | null>(null)
 
@@ -173,6 +173,32 @@ function reportInteractiveRects(): void {
   // Windows：透明区域穿透用（SetWindowRgn 裁切，需显式 apply 即时生效）
   void setPetHitRects(rects)
   void applyPetHitRects()
+}
+
+// 气泡有 enter 动画（transform: translateY(10px) scale(0.96) → 最终态，0.3s），
+// getBoundingClientRect 会把这个 transform 算进去。如果在动画刚开始时就上报矩形，
+// 量到的是缩小/偏移的中间态，而 Windows 的 SetWindowRgn 会用这个矩形直接裁剪窗口的
+// 可绘制区域——一旦动画播完、气泡长到最终大小，就会被"动画刚开始时算出的更小矩形"
+// 裁掉一块，且没有人再重新上报去纠正，裁切因此是持续存在的硬边，而不是一闪而过。
+//
+// 修复：reportInteractiveRects() 本身仍保留、用于「尽快恢复可交互」的粗略上报；
+// 真正决定裁切边界的权威上报，交给动画确实结束之后（transitionend）再做一次，
+// 并加一个 340ms（0.3s 动画 + 40ms 余量）的兜底定时器，防止某些边缘情况下
+// transitionend 没有触发（比如元素在动画播放途中被 v-if 提前销毁、跳过了
+// transitionend 事件）。
+let settleTimer: ReturnType<typeof setTimeout> | null = null
+
+function reportInteractiveRectsSettled(): void {
+  reportInteractiveRects()
+  if (settleTimer) clearTimeout(settleTimer)
+  settleTimer = setTimeout(reportInteractiveRects, 340)
+}
+
+function onBubbleTransitionEnd(e: TransitionEvent): void {
+  // 只处理气泡元素自身触发的 transitionend，避免子元素（比如 .bubble-scroll
+  // 相关的样式变化）冒泡上来导致重复触发
+  if (e.target !== e.currentTarget) return
+  reportInteractiveRects()
 }
 
 // ── 宠物交互：拖动跑步 + 单击随机 + 双击设置 ──
@@ -292,10 +318,15 @@ function onGlobalMouseUp(): void {
 // 气泡/宠物/缩放/显隐变化时重新上报矩形。
 // 关键：currentPet 异步加载完成后必须重新上报，否则矩形停留在空的初始值，
 // 导致命中判断失效（宠物区域无法交互）。
+//
+// 修复：原来这里是 setTimeout(reportInteractiveRects, 0)，正好落在气泡入场动画
+// 刚起步的那一帧，测到的是动画中间态矩形。改用 reportInteractiveRectsSettled，
+// 立即做一次粗略上报保交互，动画真正结束后（transitionend 或 340ms 兜底）
+// 再做一次权威上报去纠正。
 watch(
   () => [currentNotify.value?.id, chatText.value, petStore.scale, petStore.visible, currentPet.value?.id],
   () => {
-    setTimeout(reportInteractiveRects, 0)
+    reportInteractiveRectsSettled()
   },
 )
 
@@ -354,13 +385,12 @@ onMounted(async () => {
   }
 
   scheduleRandomAction()
-  // 尽早并多次上报可交互矩形：macOS 穿透用 NSTimer 每 50ms 轮询一次，
-  // 若矩形未及时上报，启动瞬间会被误判「鼠标不在宠物上」→ ignoresMouseEvents=true → 穿透。
-  // 因此用 nextTick 立即上报，并用多档重试兜底 async import/invoke 的延迟。
+  // 尽早上报可交互矩形：macOS 穿透用 NSTimer 每 50ms 轮询一次，若矩形未及时上报，
+  // 启动瞬间会被误判「鼠标不在宠物上」→ ignoresMouseEvents=true → 穿透。
+  // reportInteractiveRectsSettled 内部会立即上报一次、并在 340ms 后再校正一次，
+  // 足以覆盖首次挂载时的初始渲染 + 首次动画的时间窗口，不需要再手动加多档重试。
   await nextTick()
-  void reportInteractiveRects()
-  setTimeout(reportInteractiveRects, 50)
-  setTimeout(reportInteractiveRects, 150)
+  reportInteractiveRectsSettled()
   // 禁用右键菜单（透明无边框窗口，避免弹出 webview 默认菜单）
   document.addEventListener('contextmenu', (e) => e.preventDefault())
 
@@ -382,6 +412,7 @@ onUnmounted(() => {
   if (actionTimer) clearTimeout(actionTimer)
   if (randomTimer) clearTimeout(randomTimer)
   if (chatTimer) clearTimeout(chatTimer)
+  if (settleTimer) clearTimeout(settleTimer)
   window.removeEventListener('mouseup', onGlobalMouseUp)
   window.removeEventListener('mousemove', onPetDragMove)
 })
@@ -533,4 +564,29 @@ onUnmounted(() => {
   transform: translateY(6px) scale(0.98);
   opacity: 0;
 }
+
+
+<Transition name="bubble" mode="out-in">
+  <div
+    v-if="currentNotify"
+    :key="currentNotify.id"
+    ref="bubbleEl"
+    class="bubble"
+    @mousedown="onPetMouseDown"
+    @transitionend="onBubbleTransitionEnd"
+  >
+    <div class="bubble-scroll"><span class="bubble-text">{{ currentNotify.text }}</span></div>
+  </div>
+</Transition>
+<Transition name="bubble" mode="out-in">
+  <div
+    v-if="chatText && !currentNotify"
+    ref="bubbleEl"
+    class="bubble chat-bubble"
+    @transitionend="onBubbleTransitionEnd"
+  >
+    <span class="bubble-text">{{ chatText }}</span>
+  </div>
+</Transition>
+
 </style>

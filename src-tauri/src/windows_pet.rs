@@ -13,6 +13,13 @@
 // 之后不能再对它调用 DeleteObject(会导致 double-free / 未定义行为)。
 // 但如果 SetWindowRgn **失败**(返回 0),region 仍归调用者所有,必须自己 DeleteObject,
 // 否则泄漏 GDI 句柄。下面所有 SetWindowRgn 调用都据此检查返回值。
+//
+// DPI 缩放注意事项:GetDeviceCaps(hdc, LOGPIXELSX) 返回的是系统/主显示器 DPI,
+// 不是"这个窗口当前所在屏幕"的 DPI——如果窗口被拖到跟主屏缩放比例不同的副屏上,
+// 用 GetDeviceCaps 算出来的 scale 会是错的(命中矩形跟实际物理像素对不上)。
+// 改用 GetDpiForWindow(hwnd),它是按窗口取值,会随窗口跨屏移动动态更新
+// (前提是窗口声明了 Per-Monitor V2 DPI 感知,Tauri 默认会声明)。
+// GetDeviceCaps 保留作为 GetDpiForWindow 返回 0 时的兜底路径。
 
 use std::sync::Mutex;
 
@@ -28,7 +35,7 @@ static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
 #[cfg(target_os = "windows")]
 const WINDOW_CORNER_RADIUS: i32 = 14; // 与气泡/设置窗圆角一致
 #[cfg(target_os = "windows")]
-const LOGPIXELSX: i32 = 88; // GDI 常量:每逻辑英寸像素数(X 方向)
+const LOGPIXELSX: i32 = 88; // GDI 常量:每逻辑英寸像素数(X 方向),仅兜底路径用
 
 /// 前端调用:更新可交互区域列表(宠物 + 气泡矩形)。
 /// 存为静态,待 apply_pet_hit_rects 时裁切窗口。空数组表示尚未渲染出有效元素,
@@ -67,12 +74,11 @@ pub fn apply_pet_hit_rects(app: tauri::AppHandle) {
 ///
 /// 修复要点(原代码顺序反了):原来是「先 SetWindowRgn(0) 清 region → 再 hide」,
 /// 但 SetWindowRgn 会同步触发 DWM 立即按"整窗矩形、无裁切"重绘一帧,这一帧发生在
-/// hide() 真正让窗口消失之前,于是用户会看到一闪而过的窗口边框/阴影(即你截图里的问题)。
+/// hide() 真正让窗口消失之前,于是用户会看到一闪而过的窗口边框/阴影。
 ///
 /// 正确顺序:先 hide()(窗口已不可见,不会有画面暴露给用户),再清 region
 /// (清掉裁切,避免下次 show 时残留旧的小 region 导致"缩略图"问题)。
-/// 且清 region 这一步用 bRedraw=0(不重绘),因为窗口已经隐藏,不需要立即生效的重绘,
-/// 强制重绘(bRedraw=1)反而是原代码里触发闪烁的直接原因之一。
+/// 且清 region 这一步用 bRedraw=0(不重绘),因为窗口已经隐藏,不需要立即生效的重绘。
 #[tauri::command]
 pub fn hide_pet_window(app: tauri::AppHandle) {
     #[cfg(target_os = "windows")]
@@ -110,11 +116,44 @@ pub fn setup_notify_interactive(app: &tauri::AppHandle) {
     }
 }
 
+/// 计算窗口当前所在屏幕的 DPI 缩放系数。
+///
+/// 优先用 GetDpiForWindow(hwnd)——按窗口取值,窗口跨屏移动到不同缩放比例的
+/// 显示器上时会动态更新,这是 Windows 10 1607+ 推荐的正确做法。
+/// 仅当它返回 0(极少见,比如窗口句柄尚未完全与桌面窗口管理器关联)时,
+/// 才退回旧的 GetDeviceCaps 方式兜底——注意这个兜底值取的是主屏/系统 DPI,
+/// 窗口在副屏上时可能不准,但总比直接崩溃或用一个硬编码的 1.0 更合理。
+#[cfg(target_os = "windows")]
+fn window_dpi_scale(hwnd: isize) -> f64 {
+    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    if dpi > 0 {
+        return dpi as f64 / 96.0;
+    }
+
+    // 兜底路径
+    use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC};
+    unsafe {
+        let hdc = GetDC(hwnd);
+        if hdc == 0 {
+            1.0
+        } else {
+            let d = GetDeviceCaps(hdc, LOGPIXELSX);
+            let _ = ReleaseDC(hwnd, hdc);
+            if d <= 0 {
+                1.0
+            } else {
+                d as f64 / 96.0
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn apply_hit_rects(hwnd: isize) -> bool {
     use windows_sys::Win32::Graphics::Gdi::{
-        CombineRgn, CreateRoundRectRgn, DeleteObject, GetDC, GetDeviceCaps, ReleaseDC,
-        SetWindowRgn, RGN_OR,
+        CombineRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
     };
 
     // hwnd 为 0 视为无效
@@ -122,22 +161,8 @@ fn apply_hit_rects(hwnd: isize) -> bool {
         return false;
     }
 
-    // 计算 DPI scale:用窗口 DC 的 LOGPIXELSX(默认 96 → scale 1.0)。
-    // SetWindowRgn 接收物理像素,需要把 CSS 逻辑像素乘以该 scale。
-    let scale = unsafe {
-        let hdc = GetDC(hwnd);
-        if hdc == 0 {
-            1.0f64
-        } else {
-            let dpi = GetDeviceCaps(hdc, LOGPIXELSX);
-            let _ = ReleaseDC(hwnd, hdc);
-            if dpi <= 0 {
-                1.0f64
-            } else {
-                dpi as f64 / 96.0
-            }
-        }
-    };
+    // 按窗口当前所在屏幕取 DPI scale(而不是固定用主屏/系统 DPI)
+    let scale = window_dpi_scale(hwnd);
 
     let rects = match HIT_RECTS.lock() {
         Ok(g) => g.clone(),
@@ -148,7 +173,6 @@ fn apply_hit_rects(hwnd: isize) -> bool {
     // 未初始化或空矩形 → 整窗可交互(传 0 region 清除裁切)
     if !initialized || rects.is_empty() {
         unsafe {
-            // HRGN=0 时 SetWindowRgn 本身不涉及句柄所有权问题,无需检查返回值来释放对象
             SetWindowRgn(hwnd, 0, 1);
         }
         return true;
@@ -184,7 +208,7 @@ fn apply_hit_rects(hwnd: isize) -> bool {
     }
 
     if ok && combined != 0 {
-        // 修复:检查 SetWindowRgn 返回值。
+        // 检查 SetWindowRgn 返回值。
         // 成功(非 0):region 所有权转移给系统,不能再 DeleteObject。
         // 失败(0):region 仍归我们所有,必须自己 DeleteObject,否则泄漏 GDI 句柄。
         let result = unsafe { SetWindowRgn(hwnd, combined, 1) };
