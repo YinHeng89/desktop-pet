@@ -183,12 +183,12 @@ fn main() {
                     if let Ok(monitor) = w.current_monitor() {
                         if let Some(mon) = monitor {
                             let size = mon.size();
+                            let scale = mon.scale_factor();
                             let ww = 320.0;
                             let wh = 380.0;
-                            // 逻辑坐标：mon.size() 已是逻辑像素，不除 scale；
-                            // 右边距 24、底边距 75（避开 Dock）
-                            let x = size.width as f64 - ww - 24.0;
-                            let y = size.height as f64 - wh - 75.0;
+                            // 逻辑坐标：右边距 24、底边距 75（避开 Dock）
+                            let x = (size.width as f64 / scale) - ww - 24.0;
+                            let y = (size.height as f64 / scale) - wh - 75.0;
                             let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
                             let _ = w.set_position(tauri::LogicalPosition::new(x, y));
                         }

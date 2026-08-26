@@ -24,7 +24,6 @@ let chatTimer: ReturnType<typeof setTimeout> | null = null
 // ── 动作定时器（勿共用，否则互相 clearTimeout 导致随机动作被误清）──
 let actionTimer: ReturnType<typeof setTimeout> | null = null
 let randomTimer: ReturnType<typeof setTimeout> | null = null
-let runTimer: ReturnType<typeof setTimeout> | null = null
 
 // 宠物动作状态
 const petState = ref<string>('idle')
@@ -173,46 +172,89 @@ function reportInteractiveRects(): void {
 }
 
 // ── 宠物交互：拖动跑步 + 单击随机 + 双击设置 ──
+//
+// 修正说明（原实现的问题）：
+// 1. 原来的方向判断用的是 mousedown 那一瞬间「鼠标落点相对宠物中心的左右」，
+//    跟实际拖拽方向毫无关系——落点在左边、往右拖，也会被判成 runningLeft，方向经常是反的。
+//    现在改成：持续跟踪 mousemove 的真实位移 dx，用 dx 的正负判断方向，且是「谁的绝对值
+//    先达到阈值就用谁」，方向会随手指持续移动实时更新，而不是只在按下瞬间判一次。
+// 2. 原来用固定 120ms 的 setTimeout 才切换到跑步动作，这个延迟和 startDragging() 触发的
+//    系统原生拖拽是竞态关系：如果拖拽在 120ms 内就结束（快速拖一下就松手），setTimeout 里
+//    的赋值根本来不及执行，看起来就是「拖了但没反应」。现在改成基于位移阈值触发，
+//    不再依赖固定时间，只要移动够了立刻生效，跟操作快慢无关。
+// 3. 阈值判断从「时间够不够」换成「位移够不够」（DRAG_DIRECTION_THRESHOLD_PX），
+//    避免手抖/误触在原地被误判为拖拽。
+const DRAG_DIRECTION_THRESHOLD_PX = 6
+
+let dragging = false
+let dragStartX = 0
+let dragStartY = 0
+let dragDirLocked = false // 本次拖拽是否已经判定过方向（判定后不再频繁切换，避免抖动闪烁）
+
 function onPetMouseDown(e: MouseEvent): void {
-  const el = petStageEl.value
-  if (el && petState.value !== 'talk') {
-    const rect = el.getBoundingClientRect()
-    const centerX = rect.left + rect.width / 2
-    const dir = e.clientX < centerX ? 'runningLeft' : 'runningRight'
-    if (currentPet.value?.actions?.[dir]) {
-      if (runTimer) clearTimeout(runTimer)
-      runTimer = setTimeout(() => {
-        if (petState.value !== 'talk') petState.value = dir
-      }, 120)
-    }
+  if (petState.value === 'talk') {
+    void startDragging()
+    return
   }
+  dragging = true
+  dragDirLocked = false
+  dragStartX = e.clientX
+  dragStartY = e.clientY
+  window.addEventListener('mousemove', onPetDragMove)
+  // 原生窗口拖拽交给系统接管；我们自己的 mousemove 监听仍然能收到坐标用于方向判断，
+  // 两者互不冲突（startDragging 之后 mousemove 仍会派发到 window）。
   void startDragging()
 }
 
-function onPetClick(): void {
-  if (runTimer) {
-    clearTimeout(runTimer)
-    runTimer = null
+function onPetDragMove(e: MouseEvent): void {
+  if (!dragging || petState.value === 'talk') return
+
+  const dx = e.clientX - dragStartX
+  const dy = e.clientY - dragStartY
+
+  if (dragDirLocked) return // 本次拖拽方向已确定，跑步动作播完前不再切换，避免来回抖动
+
+  if (Math.abs(dx) < DRAG_DIRECTION_THRESHOLD_PX && Math.abs(dy) < DRAG_DIRECTION_THRESHOLD_PX) {
+    return // 位移还太小，可能只是手抖或即将单击，先不判定
   }
-  if (petState.value !== 'talk') {
-    const action = playRandomAction()
-    if (action) showChat(action)
+
+  // 只在水平位移明显大于/接近垂直位移时才判定为“跑步方向”，避免纯粹上下拖拽也被当成跑步
+  if (Math.abs(dx) < Math.abs(dy)) return
+
+  const dir = dx < 0 ? 'runningLeft' : 'runningRight'
+  if (currentPet.value?.actions?.[dir]) {
+    dragDirLocked = true
+    petState.value = dir
   }
 }
 
-function onGlobalMouseUp(): void {
-  if (runTimer) {
-    clearTimeout(runTimer)
-    runTimer = null
-  }
+function stopDragging(): void {
+  if (!dragging) return
+  dragging = false
+  dragDirLocked = false
+  window.removeEventListener('mousemove', onPetDragMove)
   if (petState.value === 'runningLeft' || petState.value === 'runningRight') {
     petState.value = 'idle'
     scheduleRandomAction()
   }
 }
 
+function onPetClick(): void {
+  // 说明：这里不再需要判断/清理 runTimer（已移除），拖拽状态由 dragging/dragDirLocked 管理。
+  // 只有「没有产生方向锁定的拖拽」才当作一次真正的单击，避免拖拽松手时被误判成单击触发随机动作。
+  if (dragDirLocked) return
+  if (petState.value !== 'talk') {
+    const action = playRandomAction()
+    if (action) showChat(action)
+  }
+}
+
 function onPetDblClick(): void {
   openPetPicker()
+}
+
+function onGlobalMouseUp(): void {
+  stopDragging()
 }
 
 // 气泡/宠物/缩放/显隐变化时重新上报矩形。
@@ -302,9 +344,9 @@ onUnmounted(() => {
   if (notifyTimer) clearTimeout(notifyTimer)
   if (actionTimer) clearTimeout(actionTimer)
   if (randomTimer) clearTimeout(randomTimer)
-  if (runTimer) clearTimeout(runTimer)
   if (chatTimer) clearTimeout(chatTimer)
   window.removeEventListener('mouseup', onGlobalMouseUp)
+  window.removeEventListener('mousemove', onPetDragMove)
 })
 </script>
 
