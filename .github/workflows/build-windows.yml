@@ -1,0 +1,75 @@
+name: Build Windows (single-file exe)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号 (留空则自动读取 tauri.conf.json)"
+        required: false
+        default: ""
+
+jobs:
+  build-windows:
+    name: Build Windows exe
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Read version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Building PetBuddy v$V"
+
+      - name: Build (frontend + Tauri, no installer bundle)
+        run: |
+          npm run build
+          npm run tauri build -- --no-bundle
+
+      - name: Assemble portable package
+        run: |
+          mkdir -p dist-portable
+          cp "src-tauri/target/release/PetBuddy.exe" dist-portable/
+          # Tauri v2 运行时需要旁边的 resources 目录（图标/资源）
+          if [ -d "src-tauri/target/release/resources" ]; then
+            cp -r "src-tauri/target/release/resources" dist-portable/
+          fi
+          7z a -tzip "PetBuddy-v${{ steps.ver.outputs.version }}-win.zip" ./dist-portable/*
+
+      - name: Upload artifact (versioned)
+        uses: actions/upload-artifact@v4
+        with:
+          name: PetBuddy-v${{ steps.ver.outputs.version }}-win
+          path: PetBuddy-v${{ steps.ver.outputs.version }}-win.zip
+          if-no-files-found: error

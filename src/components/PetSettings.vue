@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // 宠物设置页（settings 窗口整页内容）。
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, updateExternalPet, registerDownloadedPet, loadPetManifest, type PetDef } from '../store/pet'
 import { pushNotify } from '../store/notify'
-import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, preloadTauri, type OnlinePetMeta } from '../tauri'
+import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, preloadTauri, onEvent, type OnlinePetMeta } from '../tauri'
 import SpritePet from './SpritePet.vue'
 
 // settings 窗口是独立 webview，pets 由 App.vue onMounted 异步加载；
@@ -19,6 +19,16 @@ onMounted(() => {
   }
   // 禁用右键菜单（避免无边框窗口里弹出 webview 默认菜单）
   document.addEventListener('contextmenu', (e) => e.preventDefault())
+
+  // 同步：托盘 / main 窗口切换「显示宠物」后，本设置窗口的开关也实时更新（修复只发不收的失同步）
+  unlistenVisible = onEvent('pet-visible', (payload) => {
+    petStore.visible = payload !== 'false' && payload !== false
+  })
+})
+
+let unlistenVisible: (() => void) | null = null
+onUnmounted(() => {
+  if (unlistenVisible) { unlistenVisible(); unlistenVisible = null }
 })
 
 function onSelect(id: string): void {
