@@ -475,7 +475,7 @@ function onRootMouseDown(e: MouseEvent): void {
                 {{ curlCopied ? '已复制' : '复制' }}
               </button>
             </div>
-            <div class="s-tips-note">提示：宠物需处于「显示」状态才能看到气泡；双击气泡或最多显示 3 条后会自动消失。</div>
+            <div class="s-tips-note">提示：宠物需处于「显示」状态才能看到气ß泡；双击气泡或 3 条后会自动消失。</div>
           </div>
         </div>
         <div class="s-modal-foot">
