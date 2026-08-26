@@ -86,8 +86,7 @@ fn broadcast_event(app: tauri::AppHandle, event: String, payload: Option<serde_j
 /// 缩放变化时调用：窗口跟随宠物一起缩放，保证气泡+宠物不被裁剪。
 /// scale 范围 0.8~1.3；宠物帧 192×208，窗口 = 气泡区 + 宠物区 + 留白。
 ///
-/// 注意：只调整尺寸，不重新定位。窗口位置由用户拖动决定，
-/// 缩放时若强制锚定右下角会导致宠物位置被重置。
+/// 缩放时以窗口【右下角】为锚点重新定位：宠物贴窗口右下角，原地缩放不漂移。
 #[tauri::command]
 fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
     let Some(w) = app.get_webview_window("main") else { return };
@@ -101,7 +100,31 @@ fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
     let ww = pet_w.max(320.0 * scale);
     let wh = bubble_h + pet_h + 16.0;
 
-    let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
+    // 缓冲：窗口比内容大一圈，避免缩放过程中宠物（canvas 已先按新 scale 渲染）
+    // 短暂超出旧窗口被 OS 裁掉而闪。宠物贴窗口 right/bottom:16px，缓冲落在
+    // 左/上透明区，不影响视觉锚点。
+    let pad = 24.0;
+    let ww = ww + pad;
+    let wh = wh + pad;
+
+    // 关键时序：先读出【当前】位置与尺寸（旧值），再 set_size，最后用旧值算锚点
+    // set_position。不能在 set_size 之后才 outer_size()——那时 OS 可能已改为新尺寸，
+    // 旧位置 + 新宽度混用会让右下角算错，宠物每帧跳一下。
+    let sf = w.scale_factor().unwrap_or(1.0);
+    if let (Ok(pos), Ok(old)) = (w.outer_position(), w.outer_size()) {
+        // 旧右下角屏幕坐标（物理像素）：调用前的位置 + 调用前的尺寸
+        let right = pos.x + old.width as i32;
+        let bottom = pos.y + old.height as i32;
+        // 先改尺寸，再按「旧右下角」把新左上角定位回去，保证右下角不动
+        let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
+        let _ = w.set_position(tauri::PhysicalPosition::new(
+            ((right as f64 - ww * sf).round()) as i32,
+            ((bottom as f64 - wh * sf).round()) as i32,
+        ));
+    } else {
+        // 读不到旧状态（极端情况）时退化为仅改尺寸，避免窗口卡死
+        let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
+    }
 }
 
 /// 设置窗口最后位置的持久化文件名（存于 app_data_dir）。
