@@ -608,8 +608,8 @@ onUnmounted(() => {
   padding: calc(10px * var(--pet-scale)) calc(14px * var(--pet-scale));
   background: #fff;
   border: 0.5px solid rgba(15, 23, 42, 0.06);
-  /* 固定 14px（与设置窗统一用 --radius-window），不随宠物缩放变化，保证两端圆角一致 */
-  border-radius: var(--radius-window);
+  /* 气泡固定 14px 圆角（设置窗已独立改为 8px，气泡保持原值不跟随 --radius-window） */
+  border-radius: 14px;
   box-shadow:
     0 6px 18px rgba(15, 23, 42, 0.16),
     0 2px 6px rgba(15, 23, 42, 0.1);

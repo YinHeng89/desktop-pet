@@ -116,68 +116,57 @@ pub fn setup_notify_interactive(app: &tauri::AppHandle) {
     }
 }
 
-/// 给指定窗口设置**精确像素**的系统级圆角(Windows,方案二)。
+/// 给**设置窗口**设置系统级圆角 + 系统级阴影(Windows, DWM 方案)。
 ///
-/// 透明无边框窗口在 Windows 上仅靠 CSS `border-radius` 无法真正裁切窗口边角，
-/// WebView2 的透明区域仍保持矩形，因此会出现「外框是直角」的问题。
+/// 设置窗口是普通无边框卡片窗口，需要「圆角 + 悬浮投影」的精致外观。
+/// 若用 `SetWindowRgn` 自绘圆角，会裁掉整个窗口 shape 之外的像素 —— 包括系统投影，
+/// 导致投影消失(之前踩过的坑)。因此设置窗口改用 DWM 方案：
 ///
-/// 为什么不用 DWM 档位：
-///   `DWMWA_WINDOW_CORNER_PREFERENCE` 只能选系统预设档位(小/大)，无法精确指定像素。
-///   实测 Windows 11 的「大圆角」档实际只有 ~8px 左右，而本项目 CSS 的
-///   `--radius-window` 是 14px，两者对不上 → 窗口边角裁得太小、与内容圆角错位。
+/// 1. `DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUNDLARGE`(系统最大圆角档，~8px)，
+///    由 DWM 在系统层裁切窗口四角，且**不裁掉投影**(投影由 DWM 合成在 shape 之外)。
+/// 2. `DWMWA_SHADOW = 2`(开启系统默认阴影)，让无边框窗口获得悬浮投影。
 ///
-/// 改用 `SetWindowRgn` + `CreateRoundRectRgn` 自绘整窗圆角矩形，半径取
-/// `WINDOW_CORNER_RADIUS (14) × DPI 缩放`，与 CSS 14px 在任意缩放比例(2K/4K 高 DPI)
-/// 下都物理对齐。
+/// 这样圆角与 CSS `--radius-window`(已改为 8px)在视觉上一致，且投影由系统绘制、不被裁。
 ///
-/// 注意：DWM 档位与 SetWindowRgn 不能共存(前者会覆盖后者视觉效果)，本函数只用 Rgn。
-/// 另外窗口 resize 后 Rgn 不会自动跟随，调用方需在窗口尺寸变化时重新调用本函数。
+/// 注意：DWM 档位只能选系统预设(大圆角档实测约 8px，无法精确到任意像素)，这正是
+/// 本项目把设置窗圆角定为 8px 而非 14px 的原因。宠物窗口因需要区域级穿透，仍用
+/// `SetWindowRgn`(`apply_hit_rects`)，与本函数互不影响。
 #[cfg(target_os = "windows")]
 pub fn setup_window_rounded_corners(hwnd: isize) {
-    use windows_sys::Win32::Graphics::Gdi::{
-        CreateRoundRectRgn, DeleteObject, SetWindowRgn,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
-    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 
     if hwnd == 0 {
         return;
     }
 
-    // 取窗口实际像素矩形(屏幕绝对坐标)
-    let mut rect: RECT = unsafe { std::mem::zeroed() };
-    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
-        return;
-    }
-    let w = rect.right - rect.left;
-    let h = rect.bottom - rect.top;
-    if w <= 0 || h <= 0 {
-        return;
-    }
-
-    // 圆角半径 = 14px × DPI 缩放(逻辑像素→物理像素)，与 CSS --radius-window 对齐
-    let scale = window_dpi_scale(hwnd);
-    let mut radius = (WINDOW_CORNER_RADIUS as f64 * scale).round() as i32;
-    // 半径不能超过短边一半，否则 CreateRoundRectRgn 行为异常
-    radius = radius.min(w / 2).min(h / 2).max(0);
-    // CreateRoundRectRgn 最后两个参数是「圆角椭圆的宽/高」(=直径)，不是 CSS 的边框半径。
-    // 传 radius 会让实际圆角只有一半(7px)，必须 ×2 才等于 CSS 的 border-radius:14px。
-    let diameter = radius.saturating_mul(2);
+    // DWMWINDOWATTRIBUTE 枚举值(硬编码避免不同 windows-sys 版本命名差异)：
+    //   DWMWA_WINDOW_CORNER_PREFERENCE = 33
+    //   DWMWA_SHADOW                  = 2   (开启/关闭系统阴影)
+    // DWM_WINDOW_CORNER_PREFERENCE：
+    //   DWMWCP_DEFAULT = 0 / DONOTROUND = 1 / ROUNDSMALL = 2 / ROUNDLARGE = 3
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWA_SHADOW: u32 = 2;
+    const DWMWCP_ROUNDLARGE: i32 = 3;
+    const DWM_SHADOW_ENABLE: i32 = 2; // 2 = 启用默认系统阴影
 
     unsafe {
-        // 注意：SetWindowRgn 的 region 坐标是**相对窗口客户区左上角(0,0)**，
-        // 不能用 GetWindowRect 的屏幕绝对坐标(rect.left/top)，否则窗口左上角
-        // 会被裁成透明，导致整窗"打不开/空白"。必须用 (0,0,w,h)。
-        let rgn = CreateRoundRectRgn(0, 0, w, h, diameter, diameter);
-        if rgn == 0 {
-            return;
-        }
-        // SetWindowRgn 成功 → 所有权转移给系统，不可再 DeleteObject
-        // 失败(返回 0) → 仍归我们所有，必须释放，避免 GDI 句柄泄漏
-        let result = SetWindowRgn(hwnd, rgn, 1);
-        if result == 0 {
-            let _ = DeleteObject(rgn);
-        }
+        let corner = DWMWCP_ROUNDLARGE;
+        // 大圆角档：与 CSS --radius-window:8px 视觉对齐
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner as *const i32 as *const std::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+
+        let shadow = DWM_SHADOW_ENABLE;
+        // 开启系统阴影(无边框窗口默认无投影，需显式开启)
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_SHADOW,
+            &shadow as *const i32 as *const std::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
     }
 }
 
