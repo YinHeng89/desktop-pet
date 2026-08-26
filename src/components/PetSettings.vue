@@ -97,9 +97,15 @@ function onToggleVisible(e: Event): void {
 const notifyModalOpen = ref(false)
 const notifyText = ref('')
 const notifyError = ref('')
+// 发送冷却：点击发送后进入 3 秒冷却，按钮显示「冷却中 Ns」并禁用，倒计时结束恢复
+const COOLDOWN_SECS = 3
+const cooldownLeft = ref(0)
+let cooldownTimer: ReturnType<typeof setInterval> | null = null
 function openNotifyModal(): void {
   notifyText.value = ''
   notifyError.value = ''
+  cooldownLeft.value = 0
+  if (cooldownTimer) { clearInterval(cooldownTimer); cooldownTimer = null }
   notifyModalOpen.value = true
 }
 function closeNotifyModal(): void {
@@ -107,10 +113,20 @@ function closeNotifyModal(): void {
 }
 async function sendNotify(): Promise<void> {
   const text = notifyText.value.trim()
-  if (!text) return
+  if (!text || cooldownLeft.value > 0) return
   try {
     await pushNotify(text)
-    closeNotifyModal()
+    notifyError.value = ''
+    // 不关闭弹窗，进入冷却倒计时
+    cooldownLeft.value = COOLDOWN_SECS
+    if (cooldownTimer) clearInterval(cooldownTimer)
+    cooldownTimer = setInterval(() => {
+      cooldownLeft.value -= 1
+      if (cooldownLeft.value <= 0) {
+        cooldownLeft.value = 0
+        if (cooldownTimer) { clearInterval(cooldownTimer); cooldownTimer = null }
+      }
+    }, 1000)
   } catch (e) {
     // 后端字数硬限制等错误透传到这里（invoke reject）
     notifyError.value = (e as Error)?.message || String(e)
@@ -488,7 +504,11 @@ function onRootMouseDown(e: MouseEvent): void {
         </div>
         <div class="s-modal-foot">
           <button class="s-modal-cancel" @click="closeNotifyModal">取消</button>
-          <button class="s-modal-send" :disabled="!notifyText.trim()" @click="sendNotify">发送</button>
+          <button
+            class="s-modal-send"
+            :disabled="!notifyText.trim() || cooldownLeft > 0"
+            @click="sendNotify"
+          >{{ cooldownLeft > 0 ? `冷却中 ${cooldownLeft}s` : '发送通知' }}</button>
         </div>
       </div>
     </div>
