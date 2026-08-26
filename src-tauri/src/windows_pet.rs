@@ -116,49 +116,65 @@ pub fn setup_notify_interactive(app: &tauri::AppHandle) {
     }
 }
 
-/// 给指定窗口设置系统级圆角(Windows 11 DWM)。
+/// 给指定窗口设置**精确像素**的系统级圆角(Windows,方案二)。
 ///
 /// 透明无边框窗口在 Windows 上仅靠 CSS `border-radius` 无法真正裁切窗口边角，
 /// WebView2 的透明区域仍保持矩形，因此会出现「外框是直角」的问题。
-/// 调用 DWM 的 `DWMWA_WINDOW_CORNER_PREFERENCE` 让系统给窗口加原生**大圆角**，
-/// 与 CSS 里的 `--radius-window` 视觉保持一致(大圆角档在 2K/4K 高缩放下更明显)。
 ///
-/// Windows 10 不支持该 DWM 属性(调用会返回错误)，此时保持原有直角行为，
-/// 不影响功能；Windows 11 上生效后设置窗/气泡等子窗口四角即呈现圆角。
+/// 为什么不用 DWM 档位：
+///   `DWMWA_WINDOW_CORNER_PREFERENCE` 只能选系统预设档位(小/大)，无法精确指定像素。
+///   实测 Windows 11 的「大圆角」档实际只有 ~8px 左右，而本项目 CSS 的
+///   `--radius-window` 是 14px，两者对不上 → 窗口边角裁得太小、与内容圆角错位。
 ///
-/// 注意：DWM 只提供预设档位(小/大)，无法精确指定像素；若需与 CSS 严格对齐，
-/// 应改用 `SetWindowRgn` 自绘(见方案二)，此处用系统大圆角档作为最小改动兜底。
+/// 改用 `SetWindowRgn` + `CreateRoundRectRgn` 自绘整窗圆角矩形，半径取
+/// `WINDOW_CORNER_RADIUS (14) × DPI 缩放`，与 CSS 14px 在任意缩放比例(2K/4K 高 DPI)
+/// 下都物理对齐。
+///
+/// 注意：DWM 档位与 SetWindowRgn 不能共存(前者会覆盖后者视觉效果)，本函数只用 Rgn。
+/// 另外窗口 resize 后 Rgn 不会自动跟随，调用方需在窗口尺寸变化时重新调用本函数。
 #[cfg(target_os = "windows")]
 pub fn setup_window_rounded_corners(hwnd: isize) {
-    use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateRoundRectRgn, DeleteObject, GetWindowRect, SetWindowRgn,
+    };
+    use windows_sys::Win32::Foundation::RECT;
 
     if hwnd == 0 {
         return;
     }
 
-    // DWMWINDOWATTRIBUTE::DWMWA_WINDOW_CORNER_PREFERENCE = 33
-    // DWM_WINDOW_CORNER_PREFERENCE 真实枚举值(避免不同 windows-sys 版本命名差异)：
-    //   DWMWCP_DEFAULT     = 0
-    //   DWMWCP_DONOTROUND  = 1
-    //   DWMWCP_ROUNDSMALL  = 2
-    //   DWMWCP_ROUNDLARGE  = 3   <-- 这里用大圆角档，2K 屏上更明显
-    // 使用硬编码数值避免不同 windows-sys 版本常量命名差异导致的编译问题。
-    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-    const DWMWCP_ROUNDLARGE: i32 = 3;
+    // 取窗口实际像素矩形
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return;
+    }
+    let w = rect.right - rect.left;
+    let h = rect.bottom - rect.top;
+    if w <= 0 || h <= 0 {
+        return;
+    }
+
+    // 圆角半径 = 14px × DPI 缩放(逻辑像素→物理像素)，与 CSS --radius-window 对齐
+    let scale = window_dpi_scale(hwnd);
+    let radius = (WINDOW_CORNER_RADIUS as f64 * scale).round() as i32;
+    // 半径不能超过短边一半，否则 CreateRoundRectRgn 行为异常
+    let radius = radius.min(w / 2).min(h / 2).max(0);
 
     unsafe {
-        let pref = DWMWCP_ROUNDLARGE;
-        // DWM 属性值大小按微软文档为 sizeof(INT32) = 4 字节
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_WINDOW_CORNER_PREFERENCE,
-            &pref as *const i32 as *const std::ffi::c_void,
-            std::mem::size_of::<i32>() as u32,
-        );
+        let rgn = CreateRoundRectRgn(rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+        if rgn == 0 {
+            return;
+        }
+        // SetWindowRgn 成功 → 所有权转移给系统，不可再 DeleteObject
+        // 失败(返回 0) → 仍归我们所有，必须释放，避免 GDI 句柄泄漏
+        let result = SetWindowRgn(hwnd, rgn, 1);
+        if result == 0 {
+            let _ = DeleteObject(rgn);
+        }
     }
 }
 
-/// 给指定窗口设置系统级圆角(非 Windows 平台 no-op)。
+/// 给指定窗口设置精确像素圆角(非 Windows 平台 no-op)。
 #[cfg(not(target_os = "windows"))]
 #[allow(dead_code)]
 pub fn setup_window_rounded_corners(_hwnd: isize) {}
