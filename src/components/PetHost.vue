@@ -150,6 +150,38 @@ function onPetLeave(): void {
 const petStageEl = ref<HTMLElement | null>(null)
 const bubbleEl = ref<HTMLElement | null>(null)
 
+// 记录正在播放「离场动画」的气泡矩形。
+//
+// 根因：v-if 变 false 的瞬间，Vue 会立刻解绑 bubbleEl 这个模板 ref
+// （哪怕元素因为 <Transition> 还留在 DOM 里继续播 220ms 的淡出动画）。
+// reportInteractiveRects() 原本完全依赖 bubbleEl.value 去测量矩形，
+// ref 一旦变 null，气泡矩形就整个从上报列表里消失——SetWindowRgn 收到
+// 的新裁剪区域里根本没有这块，于是气泡在淡出动画播放到一半时就被硬裁掉，
+// 而不是跟着 opacity/scale 一起自然淡出。
+//
+// 修复：用 Transition 的 @leave 钩子，在气泡刚开始离场、DOM 元素还没被
+// ref 系统追踪但确实还在页面上时，主动测一次它的矩形并缓存下来；
+// reportInteractiveRects() 在 bubbleEl.value 为 null 时改用这个缓存值，
+// 直到 @after-leave（动画真正播完）才清空，此时才真正收窄裁剪区域。
+type CachedRect = { left: number; top: number; width: number; height: number }
+let leavingBubbleRect: CachedRect | null = null
+
+function onBubbleLeave(el: Element): void {
+  const b = el as HTMLElement
+  const r = b.getBoundingClientRect()
+  // 此时 leave-to 的 transform（scale(0.98) translateY(6px)）尚未应用，
+  // measure 到的是离场前最后的「完整态」矩形，不是过渡中途的缩小值。
+  if (r.width > 0 && r.height > 0) {
+    leavingBubbleRect = { left: r.left, top: r.top, width: r.width, height: r.height }
+  }
+  reportInteractiveRects()
+}
+
+function onBubbleAfterLeave(): void {
+  leavingBubbleRect = null
+  reportInteractiveRects()
+}
+
 function reportInteractiveRects(): void {
   if (!isTauri) return
   const rects: Array<[number, number, number, number]> = []
@@ -168,18 +200,29 @@ function reportInteractiveRects(): void {
   const bubbleShadowPad = 24 * scale
   const petShadowPad = 12 * scale
 
-  const b = bubbleEl.value
-  if (b) {
-    const r = b.getBoundingClientRect()
-    // 过滤零尺寸矩形（元素尚未布局时宽高为 0，会导致命中判断恒假 → 穿透）
-    if (r.width > 0 && r.height > 0) {
-      rects.push([
-        r.left - bubbleShadowPad,
-        r.top - bubbleShadowPad,
-        r.width + bubbleShadowPad * 2,
-        r.height + bubbleShadowPad * 2,
-      ])
-    }
+  // 优先用当前挂载的气泡 ref；ref 已解绑（正在离场动画中）时，
+  // 退回 onBubbleLeave 缓存的最后一次完整矩形，避免动画播放期间
+  // 矩形提前消失导致气泡被硬裁切。
+  const liveBubble = bubbleEl.value?.getBoundingClientRect() ?? null
+  const bubbleRect =
+    liveBubble && liveBubble.width > 0 && liveBubble.height > 0
+      ? liveBubble
+      : leavingBubbleRect
+        ? {
+            left: leavingBubbleRect.left,
+            top: leavingBubbleRect.top,
+            width: leavingBubbleRect.width,
+            height: leavingBubbleRect.height,
+          }
+        : null
+
+  if (bubbleRect) {
+    rects.push([
+      bubbleRect.left - bubbleShadowPad,
+      bubbleRect.top - bubbleShadowPad,
+      bubbleRect.width + bubbleShadowPad * 2,
+      bubbleRect.height + bubbleShadowPad * 2,
+    ])
   }
   const p = petStageEl.value
   if (p) {
@@ -460,7 +503,7 @@ onUnmounted(() => {
     class="pet-host"
     :style="{ '--pet-scale': petStore.scale, '--pet-w': petWidthCss, '--tail-right': tailRightCss }"
   >
-    <Transition name="bubble" mode="out-in">
+    <Transition name="bubble" mode="out-in" @leave="onBubbleLeave" @after-leave="onBubbleAfterLeave">
       <div
         v-if="currentNotify"
         :key="currentNotify.id"
@@ -472,7 +515,7 @@ onUnmounted(() => {
         <div class="bubble-scroll"><span class="bubble-text">{{ currentNotify.text }}</span></div>
       </div>
     </Transition>
-    <Transition name="bubble" mode="out-in">
+    <Transition name="bubble" mode="out-in" @leave="onBubbleLeave" @after-leave="onBubbleAfterLeave">
       <div
         v-if="chatText && !currentNotify"
         ref="bubbleEl"
