@@ -144,7 +144,7 @@ pub fn setup_window_rounded_corners(hwnd: isize) {
         return;
     }
 
-    // 取窗口实际像素矩形
+    // 取窗口实际像素矩形(屏幕绝对坐标)
     let mut rect: RECT = unsafe { std::mem::zeroed() };
     if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
         return;
@@ -162,7 +162,10 @@ pub fn setup_window_rounded_corners(hwnd: isize) {
     let radius = radius.min(w / 2).min(h / 2).max(0);
 
     unsafe {
-        let rgn = CreateRoundRectRgn(rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+        // 注意：SetWindowRgn 的 region 坐标是**相对窗口客户区左上角(0,0)**，
+        // 不能用 GetWindowRect 的屏幕绝对坐标(rect.left/top)，否则窗口左上角
+        // 会被裁成透明，导致整窗"打不开/空白"。必须用 (0,0,w,h)。
+        let rgn = CreateRoundRectRgn(0, 0, w, h, radius, radius);
         if rgn == 0 {
             return;
         }
