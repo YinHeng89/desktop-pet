@@ -153,25 +153,44 @@ const bubbleEl = ref<HTMLElement | null>(null)
 function reportInteractiveRects(): void {
   if (!isTauri) return
   const rects: Array<[number, number, number, number]> = []
+  const scale = petStore.scale
+
+  // box-shadow / filter:drop-shadow 都是纯视觉效果，不参与布局、
+  // 不撑大元素 border-box，getBoundingClientRect() 完全不包含它们溢出的部分。
+  // 这部分溢出像素若不算进上报矩形，会被 Windows 的 SetWindowRgn 直接裁掉
+  // （阴影缺角/断层，甚至连带裁到边缘箭头/轮廓）。故给矩形四周统一外扩，
+  // 覆盖「偏移 + 模糊半径」的最大视觉范围，外加冗余。
+  //
+  // .bubble 阴影: 0 6px 18px（下方最大约 6+18=24px）与 0 2px 6px（下方约 8px），
+  //   取较大值 24px 做基准；箭头额外溢出 9px 已被这圈阴影外扩覆盖，无需单独补。
+  // .pet-stage 的 drop-shadow(0 4px 8px)：下方最大约 4+8=12px，同样四周外扩。
+  // 四向都外扩，避免只补下方而漏掉阴影模糊在左右/上方的少量扩散。
+  const bubbleShadowPad = 24 * scale
+  const petShadowPad = 12 * scale
+
   const b = bubbleEl.value
   if (b) {
     const r = b.getBoundingClientRect()
     // 过滤零尺寸矩形（元素尚未布局时宽高为 0，会导致命中判断恒假 → 穿透）
     if (r.width > 0 && r.height > 0) {
-      // 气泡的 ::after 下箭头用 bottom: -9px * scale 溢出到 .bubble 的 border-box 外面，
-      // getBoundingClientRect() 只量元素自身 border-box，不包含溢出伪元素，
-      // 因此上报给 Windows SetWindowRgn 的矩形没盖住箭头 → 箭头被窗口裁剪区域切掉/切碎。
-      // 这里把矩形高度往下多算一点，覆盖箭头溢出区（9px 箭头本身 + 3px 冗余，
-      // 防止圆角/亚像素误差再次蹭出一条缝）。petStage 矩形无需此处理（无溢出伪元素）。
-      const tailOverflow = 12 * petStore.scale
-      rects.push([r.left, r.top, r.width, r.height + tailOverflow])
+      rects.push([
+        r.left - bubbleShadowPad,
+        r.top - bubbleShadowPad,
+        r.width + bubbleShadowPad * 2,
+        r.height + bubbleShadowPad * 2,
+      ])
     }
   }
   const p = petStageEl.value
   if (p) {
     const r = p.getBoundingClientRect()
     if (r.width > 0 && r.height > 0) {
-      rects.push([r.left, r.top, r.width, r.height])
+      rects.push([
+        r.left - petShadowPad,
+        r.top - petShadowPad,
+        r.width + petShadowPad * 2,
+        r.height + petShadowPad * 2,
+      ])
     }
   }
   // macOS：像素穿透用（NSTimer 轮询）

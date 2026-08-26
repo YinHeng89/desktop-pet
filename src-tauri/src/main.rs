@@ -98,11 +98,48 @@ fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
     let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
 }
 
-/// 打开设置窗口（居中显示并聚焦；已存在则复用）。
+/// 设置窗口最后位置的持久化文件名（存于 app_data_dir）。
+const SETTINGS_WIN_POS_FILE: &str = "petbuddy_settings_window.json";
+
+/// 读取设置窗口上次保存的位置（逻辑像素）。无文件/解析失败返回 None。
+fn load_settings_window_pos(app: &tauri::AppHandle) -> Option<(f64, f64)> {
+    let dir = app.path().app_data_dir().ok()?;
+    let path = dir.join(SETTINGS_WIN_POS_FILE);
+    let content = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let x = v.get("x")?.as_f64()?;
+    let y = v.get("y")?.as_f64()?;
+    Some((x, y))
+}
+
+/// 保存设置窗口当前位置（逻辑像素）。失败仅打印日志，不影响主流程。
+fn save_settings_window_pos(app: &tauri::AppHandle, x: f64, y: f64) {
+    let dir = match app.path().app_data_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("[settings-pos] 取 app_data_dir 失败: {e}");
+            return;
+        }
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let path = dir.join(SETTINGS_WIN_POS_FILE);
+    let json = serde_json::json!({ "x": x, "y": y });
+    if let Ok(s) = serde_json::to_string(&json) {
+        let _ = std::fs::write(path, s);
+    }
+}
+
+/// 打开设置窗口（首次居中，之后恢复到上次关闭前的位置；已存在则复用）。
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("settings") {
-        let _ = w.center();
+        // 仅当从未保存过位置时才居中（固定首次默认位置）；
+        // 之后都恢复到用户拖动后的最后位置，避免每次打开都被重置到屏幕中心。
+        if load_settings_window_pos(&app).is_none() {
+            let _ = w.center();
+        }
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -269,12 +306,19 @@ fn main() {
         .on_window_event(|window, event| {
             // settings 窗口关闭时隐藏而非销毁，便于下次复用打开
             if window.label() == "settings" {
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    // 关闭设置时隐藏 Dock 图标（原生关闭按钮 / Cmd+W 路径）
-                    #[cfg(target_os = "macos")]
-                    set_dock_visible(false);
+                match event {
+                    WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                        // 关闭设置时隐藏 Dock 图标（原生关闭按钮 / Cmd+W 路径）
+                        #[cfg(target_os = "macos")]
+                        set_dock_visible(false);
+                    }
+                    // 用户拖动设置窗口时实时保存最后位置，下次打开恢复（而非重置居中）
+                    WindowEvent::Moved(pos) => {
+                        save_settings_window_pos(window.app_handle(), pos.x.into(), pos.y.into());
+                    }
+                    _ => {}
                 }
             }
         })
