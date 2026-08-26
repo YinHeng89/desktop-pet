@@ -2,7 +2,7 @@
 // 宠物设置页（settings 窗口整页内容）。
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
-import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, updateExternalPet, registerDownloadedPet, loadPetManifest, type PetDef } from '../store/pet'
+import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, updateExternalPet, registerDownloadedPet, loadPetManifest, MIN_SCALE, MAX_SCALE, type PetDef } from '../store/pet'
 import { pushNotify } from '../store/notify'
 import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, preloadTauri, onEvent, type OnlinePetMeta } from '../tauri'
 import SpritePet from './SpritePet.vue'
@@ -115,8 +115,7 @@ async function saveEditPet(): Promise<void> {
 }
 
 // ── 缩放滑块（自绘：div 轨道 + 填充 + 圆点，像素级对齐）──
-const MIN_SCALE = 0.8
-const MAX_SCALE = 1.3
+// 复用 store 的 MIN_SCALE/MAX_SCALE（已放宽下限到 0.6），避免两处定义不一致
 const trackEl = ref<HTMLElement | null>(null)
 
 function scaleToPercent(scale: number): number {
