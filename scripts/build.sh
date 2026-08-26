@@ -62,6 +62,8 @@ node -e '
 echo ""
 
 # 生产构建：前端 vite build + Tauri 打包（生成 .app / .dmg 等产物）
+# 丢弃 $1（版本号），仅将 $2 及之后的额外参数透传给 npm，避免版本号被 vite 当作入口路径
+if [ "$#" -gt 0 ]; then shift; fi
 npm run build "$@"
 
 echo ""
