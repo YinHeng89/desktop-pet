@@ -158,7 +158,13 @@ function reportInteractiveRects(): void {
     const r = b.getBoundingClientRect()
     // 过滤零尺寸矩形（元素尚未布局时宽高为 0，会导致命中判断恒假 → 穿透）
     if (r.width > 0 && r.height > 0) {
-      rects.push([r.left, r.top, r.width, r.height])
+      // 气泡的 ::after 下箭头用 bottom: -9px * scale 溢出到 .bubble 的 border-box 外面，
+      // getBoundingClientRect() 只量元素自身 border-box，不包含溢出伪元素，
+      // 因此上报给 Windows SetWindowRgn 的矩形没盖住箭头 → 箭头被窗口裁剪区域切掉/切碎。
+      // 这里把矩形高度往下多算一点，覆盖箭头溢出区（9px 箭头本身 + 3px 冗余，
+      // 防止圆角/亚像素误差再次蹭出一条缝）。petStage 矩形无需此处理（无溢出伪元素）。
+      const tailOverflow = 12 * petStore.scale
+      rects.push([r.left, r.top, r.width, r.height + tailOverflow])
     }
   }
   const p = petStageEl.value
