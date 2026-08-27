@@ -60,26 +60,34 @@ fn broadcast_event(app: tauri::AppHandle, event: String, payload: Option<serde_j
 /// 缩放变化时调用：窗口跟随宠物一起缩放，保证气泡+宠物不被裁剪。
 /// scale 范围 0.8~1.3；宠物帧 192×208，窗口 = 气泡区 + 宠物区 + 留白。
 ///
-/// 缩放时以窗口【右下角】为锚点重新定位：宠物贴窗口右下角，原地缩放不漂移。
-#[tauri::command]
-fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
-    let Some(w) = app.get_webview_window("main") else { return };
-    let scale = scale.clamp(0.8, 1.3);
-
+/// 按 scale 计算 main 宠物窗口的逻辑尺寸（宽×高，含 24px 缓冲）。
+/// scale 范围与前端 MIN_SCALE(0.5)~MAX_SCALE(1.3) 对齐，避免 Rust 与前端口径分裂
+/// 导致窗口尺寸和精灵图渲染尺寸不一致（宠物浮在窗口偏左上、右下角留白）。
+fn pet_window_size(scale: f64) -> (f64, f64) {
+    let scale = scale.clamp(0.5, 1.3);
     let pet_w = (192.0 * scale).round();
     let pet_h = (208.0 * scale).round();
     let bubble_h = (156.0 * scale).round();
     // 宽：基线 320 × scale（等比缩放，与 worktrack 一致）；
     // 高：气泡区 + 宠物区 + 底部留白 16（scale=1 时 156+208+16=380）
-    let ww = pet_w.max(320.0 * scale);
-    let wh = bubble_h + pet_h + 16.0;
-
+    let mut ww = pet_w.max(320.0 * scale);
+    let mut wh = bubble_h + pet_h + 16.0;
     // 缓冲：窗口比内容大一圈，避免缩放过程中宠物（canvas 已先按新 scale 渲染）
     // 短暂超出旧窗口被 OS 裁掉而闪。宠物贴窗口 right/bottom:16px，缓冲落在
     // 左/上透明区，不影响视觉锚点。
     let pad = 24.0;
-    let ww = ww + pad;
-    let wh = wh + pad;
+    ww += pad;
+    wh += pad;
+    (ww, wh)
+}
+
+/// 缩放时以窗口【右下角】为锚点重新定位：宠物贴窗口右下角，原地缩放不漂移。
+#[tauri::command]
+fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    let scale = scale.clamp(0.5, 1.3);
+
+    let (ww, wh) = pet_window_size(scale);
 
     // 关键时序：先读出【当前】位置与尺寸（旧值），再 set_size，最后用旧值算锚点
     // set_position。不能在 set_size 之后才 outer_size()——那时 OS 可能已改为新尺寸，
@@ -214,13 +222,14 @@ fn main() {
             #[cfg(target_os = "macos")]
             {
                 if let Some(w) = app.get_webview_window("main") {
-                    // 紧凑宠物窗口：320×320（气泡在上 + 宠物在下），定位屏幕右下角（避 Dock）。
+                    // 紧凑宠物窗口（气泡在上 + 宠物在下），定位屏幕右下角（避 Dock）。
+                    // 初始尺寸用语公式（scale=0.7，与前端 DEFAULT_SCALE 一致），
+                    // 避免 setup 用裸 320×380 而前端 onMounted 再 resize 导致首屏跳动。
                     if let Ok(monitor) = w.current_monitor() {
                         if let Some(mon) = monitor {
                             let size = mon.size();
                             let scale = mon.scale_factor();
-                            let ww = 320.0;
-                            let wh = 380.0;
+                            let (ww, wh) = pet_window_size(0.7);
                             // 逻辑坐标：右边距 24、底边距 75（避开 Dock）
                             let x = (size.width as f64 / scale) - ww - 24.0;
                             let y = (size.height as f64 / scale) - wh - 75.0;
@@ -243,12 +252,13 @@ fn main() {
                     // 初始定位：钉到屏幕右下角，避开任务栏。
                     // Windows 无 Dock，但有底部任务栏（Win11 约 48px 高），
                     // 用 64px 底边距 + 24px 右边距兜底，避免宠物被任务栏遮住。
+                    // 初始尺寸用语公式（scale=0.7，与前端 DEFAULT_SCALE 一致），
+                    // 避免 setup 用裸 320×380 而前端 onMounted 再 resize 导致首屏跳动。
                     if let Ok(monitor) = w.current_monitor() {
                         if let Some(mon) = monitor {
                             let size = mon.size();
                             let scale = mon.scale_factor();
-                            let ww = 320.0;
-                            let wh = 380.0;
+                            let (ww, wh) = pet_window_size(0.7);
                             let x = (size.width as f64 / scale) - ww - 24.0;
                             let y = (size.height as f64 / scale) - wh - 64.0;
                             let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
@@ -258,10 +268,11 @@ fn main() {
                     windows_pet::setup_notify_interactive(app.handle());
                     // 定位完成后再显示，避免先以默认位置闪现一帧再瞬移右下角。
                     let _ = w.show();
-                    // show 之后立即按 scale=1 的精确尺寸校正窗口，规避 visible:false 下
+                    // show 之后立即按默认 scale(0.7) 的精确尺寸校正窗口，规避 visible:false 下
                     // WebView2 surface 首次初始化尺寸错误导致的宠物右侧/下方被裁剪。
-                    // 定位已在 show 前完成，此处仅校正尺寸（右下角锚点保持不变）。
-                    resize_pet_window(app.handle().clone(), 1.0);
+                    // 定位已在 show 前完成，此处仅校正尺寸（右下角锚点保持不变），
+                    // 且与前端 onMounted 的 resizePetWindow(默认scale) 口径一致，不再二次跳动。
+                    resize_pet_window(app.handle().clone(), 0.7);
                 }
 
                 // settings 窗口：透明无边框窗口在 Windows 上仅靠 CSS border-radius 无法

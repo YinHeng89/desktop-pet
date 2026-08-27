@@ -295,8 +295,10 @@ async function downloadPet(p: OnlinePetMeta): Promise<void> {
       talk: PetDef['talk']
       actions: Record<string, PetDef['idle']>
     }
-    registerDownloadedPet(def)
-    pushNotify(`已下载宠物「${def.display_name}」`)
+    const pet = registerDownloadedPet(def)
+    // 下载成功后自动切换到该宠物（跨窗口广播，main 宠物窗口实时生效）
+    setCurrentPet(pet.id)
+    pushNotify(`已下载并切换到宠物「${def.display_name}」`, 'wave')
   } catch (e) {
     pushNotify(`下载失败：${(e as Error)?.message || e}`)
   } finally {
