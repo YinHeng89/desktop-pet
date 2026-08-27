@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { isTauri, onEvent, setNotifyInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow, onWindowMoved } from '../tauri'
-import { petStore, currentPet, openPetPicker, setPetVisible, loadPetManifest, MIN_SCALE, MAX_SCALE } from '../store/pet'
+import { petStore, currentPet, openPetPicker, setPetVisible, setCurrentPet, loadPetManifest, MIN_SCALE, MAX_SCALE } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
 import SpritePet from './SpritePet.vue'
@@ -509,7 +509,10 @@ onMounted(async () => {
       if (!petStore.pets.some((p) => p.id === pureId)) {
         await loadPetManifest()
       }
-      if (petStore.pets.some((p) => p.id === pureId)) petStore.currentId = pureId
+      // 用 setCurrentPet 而非直接改 currentId：它会同时持久化到 localStorage（重启不丢）
+      // 并广播 pet-switch 到 settings 窗口（设置界面实时同步选中），否则托盘切换只在
+      // main 窗口生效、重启后被 settings 的旧值覆盖。
+      if (petStore.pets.some((p) => p.id === pureId)) setCurrentPet(pureId)
     })
     // 设置窗口同步缩放（settings 窗口改缩放 → 实时生效）
     onEvent('pet-scale', (payload) => {

@@ -239,6 +239,10 @@ export async function updateExternalPet(
 export function setCurrentPet(id: string): void {
   const pet = petStore.pets.find((p) => p.id === id)
   if (!pet) return
+  // 防重入：若已选中该宠物，不再重复持久化/广播。否则托盘或 settings 切换会触发
+  // broadcast_event 全局回传（main 窗口也收到自己广播的 pet-switch），再次进入本函数
+  // 又广播，形成无限广播回环。
+  if (petStore.currentId === id) return
   petStore.currentId = id
   try {
     localStorage.setItem(STORAGE_KEY_ID, id)

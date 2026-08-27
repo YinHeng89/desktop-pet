@@ -28,13 +28,27 @@ onMounted(() => {
     unlistenVisible = u
   })
 
+  // 同步：托盘 / main 窗口切换宠物后，本设置窗口的选中项与预览实时更新。
+  // 注意：这里只被动改 currentId 高亮，不能调 setCurrentPet（那会再广播形成回环）；
+  // 持久化已由触发方（setCurrentPet）完成，此处仅同步 UI。
+  onEvent('pet-switch', (payload) => {
+    const id = String(payload).replace(/^pet:/, '')
+    if (petStore.pets.some((p) => p.id === id)) {
+      petStore.currentId = id
+    }
+  }).then((u) => {
+    unlistenSwitch = u
+  })
+
   // 左侧底部版本号：读取 Tauri 打包时嵌入的版本（来自 tauri.conf.json）
   getVersion().then((v) => { appVersion.value = v }).catch(() => {})
 })
 
 let unlistenVisible: (() => void) | null = null
+let unlistenSwitch: (() => void) | null = null
 onUnmounted(() => {
   if (unlistenVisible) { unlistenVisible(); unlistenVisible = null }
+  if (unlistenSwitch) { unlistenSwitch(); unlistenSwitch = null }
 })
 
 // 设置界面左下角显示的版本号（来自 tauri.conf.json）
