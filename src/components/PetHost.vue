@@ -582,6 +582,14 @@ onMounted(async () => {
   // 禁用右键菜单（透明无边框窗口，避免弹出 webview 默认菜单）
   document.addEventListener('contextmenu', (e) => e.preventDefault())
 
+  // 独立启动兜底 resize：不依赖 SpritePet 的 ready 事件（该事件依赖宠物图 loadImage，
+  // 而 loadPetManifest 是异步的，首次安装/冷启动时 currentPet 可能为 null 导致 ready 延迟）。
+  // 这里用固定延时强制对齐一次首屏窗口尺寸，确保 Win11/Win10 首次启动不会显示不全，
+  // 之后 ready 触发时 scheduleStartupResize 会再做精确对齐，二者互补不冲突。
+  if (isTauri) {
+    setTimeout(() => void resizePetWindow(petStore.scale), 350)
+  }
+
   // 消费本地通知（测试通知/导入提示）
   watch(
     () => notifyStore.pending,
