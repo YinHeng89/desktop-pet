@@ -181,23 +181,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (rafId) cancelAnimationFrame(rafId)
 })
-
-// 暴露给父组件：在窗口 resize 等导致 WebView2 首帧 composite 不完整后，
-// 主动重绘当前帧（对应「点一下触发动作重绘才完整」的机制，但自动执行，无需用户交互）。
-// 窗口尺寸变化后首帧可能被裁切，RAF 持续绘制相同内容不会自愈，需一次主动重绘。
-function redraw(): void {
-  const p = pet.value
-  if (!p || !imgLoaded) return
-  const seq = seqFor(props.state)
-  if (!seq) return
-  const seqKey = `${seq.row}:${seq.count}`
-  if (seqKey !== curSeqKey) {
-    curSeqKey = seqKey
-    frameIdx = 0
-  }
-  drawFrame(seq.row, frameIdx)
-}
-defineExpose({ redraw })
 </script>
 
 <template>

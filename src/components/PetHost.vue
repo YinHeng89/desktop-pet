@@ -34,8 +34,6 @@ let randomTimer: ReturnType<typeof setTimeout> | null = null
 // 宠物动作状态
 const petState = ref<string>('idle')
 const usePet = computed(() => !!currentPet.value && petStore.visible)
-// 宠物画布组件实例（用于窗口 resize 后主动重绘，避免首帧 composite 不完整显示不全）
-const spriteRef = ref<InstanceType<typeof SpritePet> | null>(null)
 
 // 宠物真实渲染宽度（帧宽 × 缩放），用于锁定气泡容器宽度、稳定尾巴对齐。
 const petWidth = computed(() => (petStore.frame?.width || 192) * petStore.scale)
@@ -435,41 +433,6 @@ function stopDragging(): void {
   }
 }
 
-// 首屏窗口尺寸对齐：WebView2 的「窗口 resize 生效」与「canvas 内容首帧可见」存在异步延迟，
-// 且 Win10 比 Win11 更慢。一次性 resize 在内容可见前执行会导致首次显示不全、且不再重试。
-// 故在启动后短时间内做多重兜底 resize，并在每次 resize 后主动重绘 canvas 当前帧。
-let startupResizeActive = false
-let startupResizeTimers: ReturnType<typeof setTimeout>[] = []
-
-function scheduleStartupResize(): void {
-  if (startupResizeActive || !isTauri) return
-  startupResizeActive = true
-  const fire = () => {
-    void resizePetWindow(petStore.scale)
-    // 窗口 resize 后 WebView2 首帧 composite 可能不完整（宠物被裁切），
-    // RAF 一帧后主动重绘 canvas，消除「需点击动作才完整」的问题。
-    requestAnimationFrame(() => spriteRef.value?.redraw())
-  }
-  // 立即一次（精灵图已加载并绘制）
-  fire()
-  // rAF 后（canvas 首帧已 composited）再对齐一次
-  requestAnimationFrame(() => fire())
-  // 慢机器/Win10 兜底：延时再各对齐一次，覆盖 DWM 慢的情况
-  startupResizeTimers.push(setTimeout(fire, 200))
-  startupResizeTimers.push(setTimeout(fire, 450))
-  startupResizeTimers.push(
-    setTimeout(() => {
-      startupResizeActive = false
-    }, 600),
-  )
-}
-
-function onPetReady(): void {
-  // 精灵图已加载并绘制第一帧：触发首屏多重兜底 resize（见 scheduleStartupResize），
-  // 确保窗口尺寸最终与内容对齐，覆盖 Win10 等慢 compositor 的首次裁剪问题。
-  scheduleStartupResize()
-}
-
 function onPetClick(): void {
   // 只有「没有产生方向锁定的拖拽（即没有真正移动）」才当作一次真正的单击，
   // 避免拖拽松手时被误判成单击触发随机动作（Windows 下拖拽也会派发 click）。
@@ -589,16 +552,8 @@ onMounted(async () => {
   // 禁用右键菜单（透明无边框窗口，避免弹出 webview 默认菜单）
   document.addEventListener('contextmenu', (e) => e.preventDefault())
 
-  // 独立启动兜底 resize：不依赖 SpritePet 的 ready 事件（该事件依赖 loadImage，
-  // 而 loadPetManifest 是异步的，首次安装/冷启动时 currentPet 可能为 null 导致 ready 延迟）。
-  // 这里用固定延时强制对齐一次首屏窗口尺寸，之后再用 rAF 主动重绘 canvas 当前帧，
-  // 确保 Win11/Win10 首次启动不会显示不全，与 ready 触发路径互补。
-  if (isTauri) {
-    setTimeout(() => {
-      void resizePetWindow(petStore.scale)
-      requestAnimationFrame(() => spriteRef.value?.redraw())
-    }, 350)
-  }
+  // 启动时按当前缩放设一次窗口尺寸（窗口跟随缩放）
+  if (isTauri) void resizePetWindow(petStore.scale)
 
   // 消费本地通知（测试通知/导入提示）
   watch(
@@ -660,7 +615,7 @@ onUnmounted(() => {
       @click="onPetClick"
       @dblclick="onPetDblClick"
     >
-      <SpritePet ref="spriteRef" :state="petState" :scale="petStore.scale" @ready="onPetReady" />
+      <SpritePet :state="petState" :scale="petStore.scale" />
     </div>
   </div>
 </template>
