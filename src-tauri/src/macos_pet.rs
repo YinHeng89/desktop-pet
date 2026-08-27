@@ -1,115 +1,130 @@
-// macOS 专用：桌面宠物（main 窗口）的可交互区域鼠标穿透 + 拖动支持。
+// macOS 专用：桌面宠物（main 窗口）鼠标交互 + 透明区点击穿透。
 // 仅 target_os = "macos" 编译；Windows 完全不加载本模块，Windows 行为不变。
 //
-// 原理（动态切换 ignoresMouseEvents + NSTimer 主线程轮询）：
-//   1. 前端 ToastHost 通过 invoke("set_notify_interactive_rects", rects) 上报
-//      「宠物 + 气泡」的矩形（CSS 坐标，相对 notify 窗口内容区左上角，单位逻辑像素）。
-//   2. 用 NSTimer 在主线程 RunLoop 上每 50ms 执行一次检测：
-//      读 NSEvent.mouseLocation（全局鼠标，屏幕坐标，左下原点）与 notify 窗口 frame，
-//      算出鼠标在窗口内的位置（左上原点，与前端 CSS 对齐）。
-//   3. 落在可交互矩形内 → setIgnoresMouseEvents:false（可拖动/hover）；
-//      否则 → setIgnoresMouseEvents:true（点击穿透到下层桌面/窗口）。
+// 设计要点（hover 与穿透用同一套 NSTimer 轮询，互不干扰）：
+//   A) 透明区点击穿透：整窗默认可交互，但 NSTimer 每 50ms 用 NSEvent.mouseLocation
+//      （不受 app/window 激活态影响，永远拿到真实鼠标坐标）换算到窗口内容区 CSS
+//      坐标，判断鼠标是否在「可交互矩形（宠物+气泡）」内：
+//        - 命中 → setIgnoresMouseEvents:false + makeKeyWindow（点击/拖拽进 webview，
+//          且拖动一次即生效，无需先点激活窗口）
+//        - 未命中 → setIgnoresMouseEvents:true（透明区点击穿透到下层桌面/窗口）
+//   B) hover（鼠标移上去触发动作）：同样由 NSTimer 用 mouseLocation 判定 inside，
+//      状态变化时才 emit "pet-mouse-hover" 事件给前端。hover 完全不依赖浏览器原生
+//      mouseenter（不受 AppKit 激活态影响），因此「穿透切换」不会让它失效。
 //
-// 所有 AppKit 调用（NSEvent.mouseLocation / NSWindow.frame / setIgnoresMouseEvents）
-// 均发生在主线程（NSTimer 回调），避免「Must only be used from the main thread」崩溃。
+// 之所以穿透用「整窗 ignoresMouseEvents 切换」而非「hitTest 返回 nil」：
+//   后者需要给 Tauri 的 NSWindow 实例 object_setClass 换子类，风险较高；
+//   而 ignoresMouseEvents 切换是成熟的 AppKit 做法，且与 NSTimer 驱动的 hover
+//   配合后，透明区穿透与 hover 稳定可同时成立。
 
 use std::sync::Mutex;
 
-// 可交互矩形（CSS 坐标，相对 notify 窗口内容区左上角）：(x, y, w, h)
+// 可交互矩形（CSS 坐标，相对 main 窗口内容区左上角）：(x, y, w, h)
 type Rect = (f64, f64, f64, f64);
 static INTERACTIVE_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
-// 前端是否已经上报过矩形。启动初期前端尚未上报时保持窗口可交互，
-// 避免 NSTimer 在矩形为空时把窗口误判为「穿透」。
-static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
+static NS_WINDOW_PTR: Mutex<usize> = Mutex::new(0);
+static APP_HANDLE: Mutex<Option<tauri::AppHandle>> = Mutex::new(None);
+static LAST_HOVER: Mutex<Option<bool>> = Mutex::new(None);
+static INSTALLED: Mutex<bool> = Mutex::new(false);
+// 启动初期 Tauri 会重置窗口 styleMask / activationPolicy，导致我们 early 设的
+// nonactivating panel / Accessory 被覆盖（现象：首次打开点宠物仍激活 app 变灰，
+// 直到打开设置菜单那个更晚的时机才真正生效）。用「自愈计数」在前若干帧持续确保，
+// 覆盖 Tauri 初始化窗口期；设置完成后停止（避免每帧反复 set 的额外开销）。
+static ENSURE_FRAMES: Mutex<i32> = Mutex::new(200); // 200 帧 ≈ 10s，足够覆盖启动初始化
 
-/// 前端调用：更新可交互区域列表。传空数组清空（整窗穿透）。
-/// 注意：空矩形说明前端尚未渲染出有效交互元素（如宠物尚未加载），
-/// 此时把 RECTS_INITIALIZED 置回 false，让 NSTimer 保持窗口可交互，
-/// 避免「已初始化但矩形为空」导致鼠标永久穿透。
+/// 前端调用：更新可交互区域列表（宠物 + 气泡矩形，CSS 坐标）。
+/// macOS 下这些矩形用于 NSTimer 轮询判断「鼠标是否在宠物/气泡上」，
+/// 驱动穿透切换与 "pet-mouse-hover" 事件。
 #[tauri::command]
 pub fn set_notify_interactive_rects(rects: Vec<(f64, f64, f64, f64)>) {
-    let non_empty = !rects.is_empty();
-    if let Ok(mut g) = INTERACTIVE_RECTS.lock() {
-        *g = rects;
-    }
-    if let Ok(mut init) = RECTS_INITIALIZED.lock() {
-        *init = non_empty;
-    }
-}
-
-/// 是否已初始化（前端上报过矩形）。未初始化时保持可交互。
-#[allow(dead_code)]
-fn rects_initialized() -> bool {
-    match RECTS_INITIALIZED.lock() {
-        Ok(g) => *g,
-        // 锁中毒：保守认为已初始化，按矩形正常判断
-        Err(_) => true,
-    }
-}
-
-/// 判断某点（CSS 坐标，左上原点）是否落在可交互区域内。
-#[allow(dead_code)]
-fn hit_interactive(x: f64, y: f64) -> bool {
-    let g = INTERACTIVE_RECTS.lock().ok();
-    match g {
-        None => false,
-        Some(rects) => rects
-            .iter()
-            .any(|&(rx, ry, rw, rh)| x >= rx && x < rx + rw && y >= ry && y < ry + rh),
-    }
+    let mut g = INTERACTIVE_RECTS.lock().unwrap_or_else(|e| e.into_inner());
+    *g = rects;
 }
 
 #[cfg(target_os = "macos")]
 mod macos_impl {
-    use super::hit_interactive;
-    use super::rects_initialized;
+    use super::APP_HANDLE;
+    use super::ENSURE_FRAMES;
+    use super::INSTALLED;
+    use super::INTERACTIVE_RECTS;
+    use super::LAST_HOVER;
+    use super::NS_WINDOW_PTR;
     use objc2::runtime::AnyObject;
     use objc2::{define_class, msg_send, class, sel, ClassType};
-    use objc2_foundation::{NSPoint, NSRect, NSObject};
-    use std::sync::Mutex;
-    use tauri::Manager;
+    use objc2_foundation::{NSObject, NSPoint, NSRect};
+    use tauri::{Emitter, Manager};
 
-    // 存 notify 窗口的 NSWindow 指针（usize 跨线程传递，但所有 objc 调用都在主线程）。
-    static NS_WINDOW_PTR: Mutex<usize> = Mutex::new(0);
-    static INSTALLED: Mutex<bool> = Mutex::new(false);
-
-    // 定义一个 NSObject 子类作为 NSTimer 的 target，带一个 tick 方法。
+    // NSTimer target：每 50ms 计算 hover + 切换透明区穿透。
     define_class!(
         #[unsafe(super(NSObject))]
-        #[name = "PetHitTestTimerTarget"]
-        struct PetTimerTarget;
+        #[name = "PetMouseTimerTarget"]
+        struct PetMouseTimerTarget;
 
-        impl PetTimerTarget {
-            // NSTimer 回调：每 50ms 在主线程执行一次穿透检测
+        impl PetMouseTimerTarget {
             #[unsafe(method(tick:))]
             fn tick(&self, _timer: *mut AnyObject) {
                 unsafe {
                     let window_ptr = match NS_WINDOW_PTR.lock() {
                         Ok(g) => *g,
-                        Err(_) => 0,
+                        Err(_) => return,
                     };
                     if window_ptr == 0 {
                         return;
                     }
                     let window = window_ptr as *mut AnyObject;
 
-                    // 全局鼠标位置（屏幕坐标，左下原点）
+                    // ── 自愈：启动初期持续确保 nonactivating panel + Accessory ──
+                    // 现象：首次打开点宠物仍会激活 app（变灰），直到打开设置菜单
+                    // （更晚的时机）才生效 —— 说明 Tauri 在窗口创建后重置了 styleMask
+                    // 与 activationPolicy，早期设置被覆盖。这里在前 ENSURE_FRAMES 帧
+                    // 每帧纠正，覆盖其初始化窗口期；之后停止。
+                    {
+                        let mut frames = ENSURE_FRAMES.lock().unwrap_or_else(|e| e.into_inner());
+                        if *frames > 0 {
+                            *frames -= 1;
+                            // 1) 窗口 styleMask 加 NSNonactivatingPanelMask（1<<7）：
+                            //    点击窗口不激活 owning app，但 nonactivating panel 仍接收
+                            //    鼠标事件（拖拽/hover 照常）。这是 ChatGPT 桌面端浮动窗标准做法。
+                            let mask: u64 = msg_send![window, styleMask];
+                            if mask & (1u64 << 7) == 0 {
+                                let _: () = msg_send![window, setStyleMask: mask | (1u64 << 7)];
+                            }
+                            // 2) app 设为 Accessory（不显示 Dock、点击窗口不激活 app）
+                            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                            let _: () = msg_send![app, setActivationPolicy: 1i64]; // Accessory=1
+                        }
+                    }
+
+                    // 全局鼠标（屏幕坐标，左下原点）
                     let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
-                    // notify 窗口 frame（屏幕坐标，左下原点）
-                    let frame: NSRect = msg_send![window, frame];
+                    // 窗口 frame（屏幕坐标，左下原点）
+                    let wframe: NSRect = msg_send![window, frame];
+                    // 换算到窗口内容区 CSS 坐标（左上原点，与前端 getBoundingClientRect 同一空间）
+                    let css_x = mouse.x - wframe.origin.x;
+                    let css_y = wframe.size.height - (mouse.y - wframe.origin.y);
 
-                    // 鼠标在窗口内的位置，转「左上原点」CSS 坐标（与前端对齐）：
-                    let wx = mouse.x - frame.origin.x;
-                    let wy = frame.size.height - (mouse.y - frame.origin.y);
+                    let rects = INTERACTIVE_RECTS.lock().unwrap_or_else(|e| e.into_inner());
+                    let inside = rects
+                        .iter()
+                        .any(|&(rx, ry, rw, rh)| css_x >= rx && css_x < rx + rw && css_y >= ry && css_y < ry + rh);
 
-                    // 前端尚未上报矩形（启动初期）→ 保持可交互，避免误穿透；
-                    // 已初始化 → 按命中判断（命中可交互，未命中穿透）。
-                    let should_ignore = if rects_initialized() {
-                        !hit_interactive(wx, wy)
-                    } else {
-                        false
-                    };
-                    let _: () = msg_send![window, setIgnoresMouseEvents: should_ignore];
+                    // 命中可交互区 → 窗口可交互（点击/拖拽进 webview）；
+                    // 未命中（透明区）→ 穿透到下层桌面/窗口。
+                    // 注意：ignoresMouseEvents 切换不影响下面的 hover 判定
+                    // （hover 由 mouseLocation 直接算，不依赖 webview 的原生 mousemove）。
+                    // 切忌调用 makeKeyWindow：它会把 Accessory app 带到前台、抢走当前
+                    // app 的焦点（点宠物时浏览器等会失焦）。Accessory + ignoresMouseEvents:false
+                    // + tauri.conf 的 acceptFirstMouse 已足够让点击/拖拽直接生效。
+                    let _: () = msg_send![window, setIgnoresMouseEvents: !inside];
+
+                    // hover：仅在状态变化时推送前端
+                    let mut last = LAST_HOVER.lock().unwrap_or_else(|e| e.into_inner());
+                    if last.map_or(true, |v| v != inside) {
+                        *last = Some(inside);
+                        if let Some(app) = APP_HANDLE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                            let _ = app.emit("pet-mouse-hover", inside);
+                        }
+                    }
                 }
             }
         }
@@ -117,11 +132,17 @@ mod macos_impl {
 
     pub fn install(app: &tauri::AppHandle) -> bool {
         {
-            let mut installed = INSTALLED.lock().unwrap();
+            let mut installed = INSTALLED.lock().unwrap_or_else(|e| e.into_inner());
             if *installed {
                 return true;
             }
             *installed = true;
+        }
+
+        // 保存 AppHandle 供 timer 推送 hover 事件
+        {
+            let mut g = APP_HANDLE.lock().unwrap_or_else(|e| e.into_inner());
+            *g = Some(app.clone());
         }
 
         let Some(w) = app.get_webview_window("main") else {
@@ -132,26 +153,33 @@ mod macos_impl {
         };
         let ns_window_ptr = ns_window as *mut AnyObject as usize;
         {
-            let mut g = NS_WINDOW_PTR.lock().unwrap();
+            let mut g = NS_WINDOW_PTR.lock().unwrap_or_else(|e| e.into_inner());
             *g = ns_window_ptr;
         }
 
         unsafe {
-            // 初始状态：可交互（false = 不忽略鼠标）
-            let _: () = msg_send![ns_window_ptr as *mut AnyObject, setIgnoresMouseEvents: false];
+            // 关键：把窗口设为 nonactivating panel（NSNonactivatingPanelMask = 1<<7）。
+            // 这是 ChatGPT 桌面端等浮动助手的标准做法——窗口点击【不会激活 owning app】，
+            // 因此当前前台 app（如浏览器）保持焦点不变灰；同时 nonactivating panel 仍能
+            // 正常接收鼠标事件，拖拽/hover 照常生效。仅加 bit 不改窗口类，风险低。
+            let mask: u64 = msg_send![ns_window_ptr as *mut AnyObject, styleMask];
+            let new_mask = mask | (1u64 << 7); // NSWindowStyleMaskNonactivatingPanel
+            let _: () = msg_send![ns_window_ptr as *mut AnyObject, setStyleMask: new_mask];
 
-            // 创建 target 实例（NSObject 子类，作为 NSTimer 的 target）。
-            // 注意：define_class! 生成的类需先调用 class() 触发注册到 runtime，
-            // 否则 class!(PetTimerTarget) 会因「class not found」panic。
-            let cls = PetTimerTarget::class();
-            let target: *mut AnyObject = msg_send![cls, alloc];
-            let target: *mut AnyObject = msg_send![target, init];
-            // scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:
-            // 由主线程 RunLoop 持有，自动重复触发，无需手动持有 timer。
+            // 初始状态：保持可交互（false），避免启动瞬间被误判穿透导致无法点击。
+            let _: () = msg_send![ns_window_ptr as *mut AnyObject, setIgnoresMouseEvents: false];
+            let _: () = msg_send![ns_window_ptr as *mut AnyObject, setAcceptsMouseMovedEvents: true];
+            // 注意：不调用 makeKeyWindow，避免 Accessory app 被带到前台抢焦点
+            // （点宠物时当前 app 应保持在前台）。
+
+            // 启动 NSTimer 每 50ms：计算 hover + 切换透明区穿透
+            let cls = PetMouseTimerTarget::class();
+            let target_obj: *mut AnyObject = msg_send![cls, alloc];
+            let target_obj: *mut AnyObject = msg_send![target_obj, init];
             let _timer: *mut AnyObject = msg_send![
                 class!(NSTimer),
                 scheduledTimerWithTimeInterval: 0.05f64,
-                target: &*target,
+                target: &*target_obj,
                 selector: sel!(tick:),
                 userInfo: std::ptr::null::<AnyObject>(),
                 repeats: true
@@ -161,8 +189,7 @@ mod macos_impl {
     }
 }
 
-/// 对外入口：notify 窗口创建后调用。
-/// 仅在 macOS 编译（Windows 走 windows_pet 模块，main.rs 的 mac 分支才调用本函数）。
+/// 对外入口：main 窗口创建后调用。
 #[cfg(target_os = "macos")]
 pub fn setup_notify_interactive(app: &tauri::AppHandle) {
     let _ = macos_impl::install(app);

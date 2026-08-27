@@ -29,24 +29,20 @@ fn open_external(url: String) {
 /// 与宠物是否显示无关。仅在 macOS 主线程调用有效。
 #[cfg(target_os = "macos")]
 fn set_dock_visible(visible: bool) {
-    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-    use objc2::MainThreadMarker;
-    // setActivationPolicy 必须在主线程调用
-    let mtm = match MainThreadMarker::new() {
-        Some(mtm) => mtm,
-        None => {
-            eprintln!("[dock] 非主线程，跳过切换 Dock 图标");
-            return;
+    use objc2::runtime::AnyObject;
+    use objc2::{msg_send, class};
+    // 直接用 msg_send! 调 NSApp，绕过 MainThreadMarker 检查。
+    // Tauri 在 setup 时已初始化好 NSApp，sharedApplication/setActivationPolicy:
+    // 在此阶段调用安全，可确保激活策略真正切换为 Accessory（否则点击宠物会激活 app，
+    // 导致当前前台 app 失焦变灰）。
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        // NSApplicationActivationPolicy: Regular=0, Accessory=1, Prohibited=2
+        let policy: i64 = if visible { 0 } else { 1 };
+        let ok: bool = msg_send![app, setActivationPolicy: policy];
+        if !ok {
+            eprintln!("[dock] 切换激活策略失败 visible={visible}");
         }
-    };
-    let policy = if visible {
-        NSApplicationActivationPolicy::Regular
-    } else {
-        NSApplicationActivationPolicy::Accessory
-    };
-    let app = NSApplication::sharedApplication(mtm);
-    if !app.setActivationPolicy(policy) {
-        eprintln!("[dock] 切换激活策略失败 visible={visible}");
     }
 }
 

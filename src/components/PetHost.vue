@@ -132,19 +132,41 @@ function enqueueNotify(payload: { text?: string; action?: string; duration?: num
 }
 
 // ── hover 宠物 ──
-function onPetEnter(): void {
+// macOS 下 hover 不依赖浏览器原生 mouseenter（受 AppKit 激活态影响会失效），
+// 改由 Rust 端 NSTimer 轮询鼠标位置、判定是否在宠物/气泡矩形内，
+// 通过 "pet-mouse-hover" 事件推过来，这里维护 isHover 并驱动动作。
+// 原生 @mouseenter/@mouseleave 仅作为非 Tauri（浏览器 dev）兜底。
+const isHover = ref(false)
+
+function enterHover(): void {
   if (petState.value === 'talk') return
   playAction('waiting', undefined, () => {
     if (petState.value === 'waiting') petState.value = 'idle'
     scheduleRandomAction()
   })
 }
-function onPetLeave(): void {
+function leaveHover(): void {
   if (petState.value === 'waiting') {
     petState.value = 'idle'
     scheduleRandomAction()
   }
 }
+
+// 原生兜底（仅非 Tauri 生效，避免与 isHover 事件双触发）
+function onPetEnter(): void {
+  if (isTauri) return
+  enterHover()
+}
+function onPetLeave(): void {
+  if (isTauri) return
+  leaveHover()
+}
+
+// Tauri：监听 Rust 推送的 hover 状态（与穿透同一套判定，不受激活态影响）
+watch(isHover, (active) => {
+  if (active) enterHover()
+  else leaveHover()
+})
 
 // ── Windows 像素穿透：上报可交互矩形 ──
 const petStageEl = ref<HTMLElement | null>(null)
@@ -308,6 +330,7 @@ let dragStartedOs = false // 是否已经调用过系统级 startDragging（只�
 // mouseup 收不到也能恢复 dragging=false，避免下一次单击被 if(dragMoved) return 误吞。
 let dragMovedTimer: ReturnType<typeof setTimeout> | null = null
 let unlistenWindowMoved: (() => void) | null = null
+let unlistenHover: (() => void) | null = null
 
 function onPetMouseDown(e: MouseEvent): void {
   // 双击兜底：Windows 上 startDragging 会吞掉 dblclick，这里用 mousedown 的 detail 直接拦截
@@ -488,6 +511,11 @@ onMounted(async () => {
     onEvent('pet-toggle-visible', () => {
       setPetVisible(!petStore.visible)
     })
+    // macOS hover 由 Rust NSTimer 轮询鼠标位置判定后推送（不依赖浏览器原生 mouseenter，
+    // 避免 AppKit 激活态导致 hover 失效）。收到后维护 isHover，驱动 hover 动作。
+    unlistenHover = await onEvent('pet-mouse-hover', (payload) => {
+      isHover.value = payload === true || payload === 'true'
+    })
   }
 
   scheduleRandomAction()
@@ -521,6 +549,7 @@ onUnmounted(() => {
   if (settleTimer) clearTimeout(settleTimer)
   if (dragMovedTimer) clearTimeout(dragMovedTimer)
   if (unlistenWindowMoved) unlistenWindowMoved()
+  if (unlistenHover) unlistenHover()
   window.removeEventListener('mouseup', onGlobalMouseUp)
   window.removeEventListener('mousemove', onPetDragMove)
 })
@@ -557,6 +586,7 @@ onUnmounted(() => {
     <div
       ref="petStageEl"
       class="pet-stage"
+      :class="{ hover: isHover }"
       @mouseenter="onPetEnter"
       @mouseleave="onPetLeave"
       @mousedown="onPetMouseDown"
