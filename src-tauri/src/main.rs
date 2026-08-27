@@ -243,19 +243,24 @@ fn main() {
                     // 初始定位：钉到屏幕右下角，避开任务栏。
                     // Windows 无 Dock，但有底部任务栏（Win11 约 48px 高），
                     // 用 64px 底边距 + 24px 右边距兜底，避免宠物被任务栏遮住。
-                    if let Ok(monitor) = w.current_monitor() {
-                        if let Some(mon) = monitor {
-                            let size = mon.size();
-                            let scale = mon.scale_factor();
-                            let ww = 320.0;
-                            let wh = 380.0;
-                            let x = (size.width as f64 / scale) - ww - 24.0;
-                            let y = (size.height as f64 / scale) - wh - 64.0;
-                            let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
-                            let _ = w.set_position(tauri::LogicalPosition::new(x, y));
-                        }
+                    // current_monitor 取窗口当前所在屏；取不到时退化到主屏，
+                    // 避免返回 None 导致整段定位被跳过、窗口留在默认位置。
+                    let monitor = w.current_monitor().ok().flatten().or_else(|| {
+                        w.app_handle().primary_monitor().ok().flatten()
+                    });
+                    if let Some(mon) = monitor {
+                        let size = mon.size();
+                        let scale = mon.scale_factor();
+                        let ww = 320.0;
+                        let wh = 380.0;
+                        let x = (size.width as f64 / scale) - ww - 24.0;
+                        let y = (size.height as f64 / scale) - wh - 64.0;
+                        let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
+                        let _ = w.set_position(tauri::LogicalPosition::new(x, y));
                     }
                     windows_pet::setup_notify_interactive(app.handle());
+                    // 定位完成后再显示，避免先以默认位置闪现一帧再瞬移右下角。
+                    let _ = w.show();
                 }
 
                 // settings 窗口：透明无边框窗口在 Windows 上仅靠 CSS border-radius 无法
