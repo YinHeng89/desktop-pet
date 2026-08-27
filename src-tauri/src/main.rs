@@ -24,32 +24,6 @@ fn open_external(url: String) {
     }
 }
 
-/// 控制 macOS Dock 图标是否显示。
-/// 打开设置窗口时设为 Regular（显示 Dock）；关闭设置窗口时设为 Accessory（隐藏 Dock）。
-/// 与宠物是否显示无关。仅在 macOS 主线程调用有效。
-#[cfg(target_os = "macos")]
-fn set_dock_visible(visible: bool) {
-    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-    use objc2::MainThreadMarker;
-    // setActivationPolicy 必须在主线程调用
-    let mtm = match MainThreadMarker::new() {
-        Some(mtm) => mtm,
-        None => {
-            eprintln!("[dock] 非主线程，跳过切换 Dock 图标");
-            return;
-        }
-    };
-    let policy = if visible {
-        NSApplicationActivationPolicy::Regular
-    } else {
-        NSApplicationActivationPolicy::Accessory
-    };
-    let app = NSApplication::sharedApplication(mtm);
-    if !app.setActivationPolicy(policy) {
-        eprintln!("[dock] 切换激活策略失败 visible={visible}");
-    }
-}
-
 /// 设置开机自启（true=开启，false=关闭）。
 #[tauri::command]
 fn set_autostart(enabled: bool) -> Result<String, String> {
@@ -173,17 +147,11 @@ fn open_settings_window(app: tauri::AppHandle) {
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
-    // 打开设置时显示 Dock 图标（放在 show 之后，即使切换失败也不影响窗口显示）
-    #[cfg(target_os = "macos")]
-    set_dock_visible(true);
 }
 
 /// 隐藏设置窗口（前端关闭按钮调用）。
 #[tauri::command]
 fn close_settings_window(app: tauri::AppHandle) {
-    // 关闭设置时隐藏 Dock 图标
-    #[cfg(target_os = "macos")]
-    set_dock_visible(false);
     if let Some(w) = app.get_webview_window("settings") {
         let _ = w.hide();
     }
@@ -364,9 +332,6 @@ fn main() {
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = window.hide();
-                        // 关闭设置时隐藏 Dock 图标（原生关闭按钮 / Cmd+W 路径）
-                        #[cfg(target_os = "macos")]
-                        set_dock_visible(false);
                     }
                     // 用户拖动设置窗口时实时保存最后位置，下次打开恢复（而非重置居中）
                     WindowEvent::Moved(pos) => {
