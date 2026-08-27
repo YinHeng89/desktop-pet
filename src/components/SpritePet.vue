@@ -20,11 +20,18 @@ const props = withDefaults(
   { state: 'idle', scale: 1 },
 )
 
+const emit = defineEmits<{
+  // 精灵图首次加载完成并已绘制第一帧：通知父组件可以按真实内容调整窗口尺寸。
+  // 避免窗口在 canvas 还是空白/未绘制时就被 resize，导致 WebView 首次显示不全。
+  ready: []
+}>()
+
 const canvas = ref<HTMLCanvasElement | null>(null)
 // 实例级图片对象（关键：不可模块级共享）
 const img = new Image()
 img.crossOrigin = 'anonymous'
 let imgLoaded = false
+let readyEmitted = false
 let rafId = 0
 let lastTs = 0
 let frameIdx = 0
@@ -160,6 +167,10 @@ function loadImage(): void {
   img.onload = () => {
     imgLoaded = true
     resetAndPlay()
+    if (!readyEmitted) {
+      readyEmitted = true
+      emit('ready')
+    }
   }
   img.onerror = () => {
     imgLoaded = false

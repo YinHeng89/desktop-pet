@@ -4,6 +4,9 @@ import { isTauri, onEvent, setNotifyInteractiveRects, setPetHitRects, applyPetHi
 import { petStore, currentPet, openPetPicker, setPetVisible, loadPetManifest, MIN_SCALE, MAX_SCALE } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
+
+// 防止宠物多次切换/精灵图重复加载时重复 resize 窗口；只在首次 ready 时调整。
+let petReadyResized = false
 import SpritePet from './SpritePet.vue'
 
 // macOS 判断：macOS 由原生层（macos_pet.rs 的 NSTimer）驱动 hover/drag，
@@ -433,6 +436,14 @@ function stopDragging(): void {
   }
 }
 
+function onPetReady(): void {
+  // 精灵图已加载并画出第一帧，此时按真实内容调整窗口尺寸。
+  // 只在首次 ready 时 resize：防止宠物切换/重新加载时频繁抖动窗口。
+  if (petReadyResized || !isTauri) return
+  petReadyResized = true
+  void resizePetWindow(petStore.scale)
+}
+
 function onPetClick(): void {
   // 只有「没有产生方向锁定的拖拽（即没有真正移动）」才当作一次真正的单击，
   // 避免拖拽松手时被误判成单击触发随机动作（Windows 下拖拽也会派发 click）。
@@ -552,9 +563,6 @@ onMounted(async () => {
   // 禁用右键菜单（透明无边框窗口，避免弹出 webview 默认菜单）
   document.addEventListener('contextmenu', (e) => e.preventDefault())
 
-  // 启动时按当前缩放设一次窗口尺寸（窗口跟随缩放）
-  if (isTauri) void resizePetWindow(petStore.scale)
-
   // 消费本地通知（测试通知/导入提示）
   watch(
     () => notifyStore.pending,
@@ -615,7 +623,7 @@ onUnmounted(() => {
       @click="onPetClick"
       @dblclick="onPetDblClick"
     >
-      <SpritePet :state="petState" :scale="petStore.scale" />
+      <SpritePet :state="petState" :scale="petStore.scale" @ready="onPetReady" />
     </div>
   </div>
 </template>
