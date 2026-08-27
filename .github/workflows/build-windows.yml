@@ -1,20 +1,26 @@
-name: Build Windows (single-file exe)
+name: Build & Release Windows
 
+# 触发方式：
+#   1) 打 tag 推送：git tag v0.1.25 && git push --tags   → 自动构建并发布到 Releases
+#   2) 手动触发：Actions 页面 → Run workflow（可填 version，留空则 patch+1）
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
-        description: "指定版本号 (如 0.1.2)。留空则自动按小版本(patch)自增"
+        description: "指定版本号 (如 0.1.25)。留空则自动按小版本(patch)自增"
         required: false
         default: ""
 
-# 自增版本后需要把改动写回仓库，故授予 contents 写权限
+# 发布到 Releases 需要写权限
 permissions:
   contents: write
 
 jobs:
-  build-windows:
-    name: Build Windows exe
+  release-windows:
+    name: Build & Release Windows
     runs-on: windows-latest
     defaults:
       run:
@@ -47,12 +53,13 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      # 自增版本：手动填 version 输入则用填写值，否则读取 package.json 的 patch +1
+      # 解析版本号：tag 触发取 tag 名（去 v 前缀），手动触发取输入或 patch+1
       # 并同步写回 package.json / tauri.conf.json / Cargo.toml 三处（必须一致）
-      - name: Bump version
+      - name: Resolve & bump version
         id: ver
         env:
           VERSION_INPUT: ${{ github.event.inputs.version }}
+          TAG_REF: ${{ github.ref_name }}
         run: |
           node -e '
             const fs = require("fs");
@@ -60,8 +67,9 @@ jobs:
             const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
             const cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
             const input = process.env.VERSION_INPUT || "";
-            let v = input || pkg.version;
-            if (!input) {
+            let v = input;
+            if (!v && process.env.TAG_REF.startsWith("v")) v = process.env.TAG_REF.slice(1);
+            if (!v) {
               const parts = pkg.version.split(".");
               const pat = parseInt(parts[2] || "0", 10);
               v = parts[0] + "." + parts[1] + "." + (pat + 1);
@@ -76,32 +84,31 @@ jobs:
             console.log("Version -> " + v);
           '
 
-      - name: Commit bumped version
+      # 手动触发时：把自增后的版本写回仓库，并打对应 tag 推送（保证本地/Release 一致）
+      - name: Commit bumped version & tag
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
           git commit -m "chore: bump version to ${{ steps.ver.outputs.version }}" || echo "nothing to commit"
+          git tag "v${{ steps.ver.outputs.version }}"
           git push
+          git push origin "v${{ steps.ver.outputs.version }}"
 
-      - name: Build (frontend + Tauri, no installer bundle)
-        run: |
-          npm run build
-          npm run tauri build -- --no-bundle
-
-      - name: Assemble portable package
-        run: |
-          mkdir -p dist-portable
-          cp "src-tauri/target/release/PetBuddy.exe" dist-portable/
-          # Tauri v2 运行时需要旁边的 resources 目录（图标/资源）
-          if [ -d "src-tauri/target/release/resources" ]; then
-            cp -r "src-tauri/target/release/resources" dist-portable/
-          fi
-          7z a -tzip "PetBuddy-v${{ steps.ver.outputs.version }}-win.zip" ./dist-portable/*
-
-      - name: Upload artifact (versioned)
-        uses: actions/upload-artifact@v4
+      # 用官方 tauri-action 构建并发布到 GitHub Releases
+      # （自动创建/更新同版本 Release，并上传所有 bundle 产物：msi / nsis 等）
+      - name: Build & publish to Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: PetBuddy-v${{ steps.ver.outputs.version }}-win
-          path: PetBuddy-v${{ steps.ver.outputs.version }}-win.zip
-          if-no-files-found: error
+          projectPath: ./src-tauri
+          tagName: v${{ steps.ver.outputs.version }}
+          releaseName: PetBuddy v${{ steps.ver.outputs.version }}
+          releaseBody: "See the assets to download PetBuddy for Windows."
+          releaseDraft: false
+          prerelease: false
+          # 若想降低 360 误报，优先出安装包（msi/nsis）而非裸 exe；
+          # 默认按 tauri.conf.json 的 bundle.targets 出包，可在此用 args 覆盖：
+          # args: --bundles nsis,msi
