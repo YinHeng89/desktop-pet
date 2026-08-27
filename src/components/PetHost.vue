@@ -318,13 +318,20 @@ function onBubbleTransitionEnd(e: TransitionEvent): void {
 // 3. 阈值判断从「时间够不够」换成「位移够不够」（DRAG_DIRECTION_THRESHOLD_PX），
 //    避免手抖/误触在原地被误判为拖拽。
 const DRAG_DIRECTION_THRESHOLD_PX = 6
+// 切换拖拽方向所需的「净位移」阈值。从当前方向锚点开始，必须向反方向
+// 净移动这么多像素，才允许切换方向。中途的来回抖动只要累计不超此值就不切换，
+// 彻底避免 OS 拖拽过程中坐标取整噪声导致左右抖动。
+const DRAG_DIR_SWITCH_PX = 60
 
 let dragging = false
 let dragMoved = false // 本次按下是否真的产生了拖拽位移（用于区分单击/拖拽）
 let dragStartX = 0
 let dragStartY = 0
-let dragDirLocked = false // 本次拖拽是否已经判定过方向（判定后不再频繁切换，避免抖动闪烁）
+// 本次拖拽是否已判定过方向。仅用于 stopDragging 时决定是否回 idle，不阻止 onMoved 持续纠向。
+let dragDirLocked = false
 let dragStartedOs = false // 是否已经调用过系统级 startDragging（只调一次）
+let dragAnchorX = 0 // 当前方向锚点（上一次成功切换方向时的窗口 x），用于判反向
+let dragAnchorInit = false // 锚点是否已用首帧真实坐标初始化（避免用 0 做哨兵与真实 x=0 冲突）
 // Windows 系统拖拽兜底：startDragging 后 OS 接管，mouseup 可能被吞导致 dragging 卡 true。
 // 改用窗口 Moved 事件 debounce 兜底（窗口停止移动 ~180ms 即认为拖拽结束），即使
 // mouseup 收不到也能恢复 dragging=false，避免下一次单击被 if(dragMoved) return 误吞。
@@ -342,10 +349,17 @@ function onPetMouseDown(e: MouseEvent): void {
     void startDragging()
     return
   }
+  // 确保上一次拖拽残留的窗口监听被移除（避免快速松手再按下时两个 onMoved 监听并存，导致方向被双回调更新）
+  if (unlistenWindowMoved) {
+    unlistenWindowMoved()
+    unlistenWindowMoved = null
+  }
   dragging = true
   dragMoved = false
   dragDirLocked = false
   dragStartedOs = false
+  dragAnchorX = 0
+  dragAnchorInit = false
   dragStartX = e.clientX
   dragStartY = e.clientY
   window.addEventListener('mousemove', onPetDragMove)
@@ -363,31 +377,47 @@ function onPetDragMove(e: MouseEvent): void {
   const dx = e.clientX - dragStartX
   const dy = e.clientY - dragStartY
 
-  // 位移未达阈值：可能是手抖或即将单击，先不判定、也不启动系统拖拽
   if (Math.abs(dx) < DRAG_DIRECTION_THRESHOLD_PX && Math.abs(dy) < DRAG_DIRECTION_THRESHOLD_PX) {
     return
   }
 
-  // 首次超过阈值：标记已移动，并按当前水平方向预判跑步动作（早于系统拖拽接管，
-  // 避免 Windows 上 startDragging 之后 webview 收不到 mousemove 导致方向永远不更新）。
-  if (!dragMoved) {
-    dragMoved = true
-    if (!dragDirLocked && Math.abs(dx) >= Math.abs(dy)) {
-      const dir = dx < 0 ? 'runningLeft' : 'runningRight'
-      if (currentPet.value?.actions?.[dir]) {
-        dragDirLocked = true
-        petState.value = dir
-      }
+  if (!dragMoved) dragMoved = true
+
+  // 初始方向预判（OS 接管拖拽之前，mousemove 还在正常触发时用）。
+  // 只做"首次无方向时给一个初始方向"，不设 dragDirLocked，真正的持续纠向交给 onWindowMoved 锚点法，
+  // 这样同一段拖拽（不松手）里随时可以换方向，且两套判定标准统一（都看净位移符号）。
+  if (!dragDirLocked && Math.abs(dx) >= Math.abs(dy)) {
+    const dir = dx < 0 ? 'runningLeft' : 'runningRight'
+    if (currentPet.value?.actions?.[dir] && petState.value !== dir) {
+      petState.value = dir
     }
   }
 
-  // 启动系统级窗口拖拽（只调一次）。调用后 OS 接管移动，webview 的 mousemove 在
-  // Windows 上可能不再派发——但方向已经在上面预判好了，不影响跑步动作展示。
   if (!dragStartedOs) {
     dragStartedOs = true
-    // 注册窗口 Moved 兜底：系统拖拽期间窗口会高频触发 Moved，停手后约 180ms 不再移动
-    // 即判定拖拽结束（Windows 上 mouseup 可能被 OS 吞掉，必须靠这个兜底恢复状态）。
-    void onWindowMoved(() => {
+    // 拖拽全程用窗口坐标持续纠正方向（OS 接管后 mousemove 可能不再触发，
+    // 但 onMoved 会持续触发，携带真实窗口坐标）。
+    void onWindowMoved((pos) => {
+      // 方向锚点法：从锚点开始，必须向某方向净移动 DRAG_DIR_SWITCH_PX 才切换方向，
+      // 并把锚点更新到当前位置。中途抖动（净位移不足阈值）不会切换，彻底抗抖。
+      // 第一帧先用真实坐标初始化锚点（用独立布尔标记，避免 x=0 与未初始化哨兵冲突）。
+      if (!dragAnchorInit) {
+        dragAnchorInit = true
+        dragAnchorX = pos.x
+        return
+      }
+      const offset = pos.x - dragAnchorX
+      if (Math.abs(offset) >= DRAG_DIR_SWITCH_PX) {
+        const dir = offset < 0 ? 'runningLeft' : 'runningRight'
+        if (currentPet.value?.actions?.[dir] && petState.value !== dir) {
+          dragDirLocked = true
+          petState.value = dir
+        }
+        // 无论是否切换成功，都更新锚点，避免在同一侧反复累加触发
+        dragAnchorX = pos.x
+      }
+
+      // 原有的 180ms 停止拖拽兜底逻辑
       if (dragMovedTimer) clearTimeout(dragMovedTimer)
       dragMovedTimer = setTimeout(() => {
         dragMovedTimer = null
@@ -403,8 +433,8 @@ function onPetDragMove(e: MouseEvent): void {
 function stopDragging(): void {
   if (!dragging) return
   dragging = false
-  const wasDirLocked = dragDirLocked
   dragDirLocked = false
+  dragAnchorX = 0 // 清空方向锚点，避免下次拖拽复用旧坐标误判首帧方向
   window.removeEventListener('mousemove', onPetDragMove)
   window.removeEventListener('mouseup', onGlobalMouseUp)
   // 清理 Windows 系统拖拽兜底监听与 timer（避免 mouseup 被吞时的残留触发）
@@ -416,11 +446,11 @@ function stopDragging(): void {
     unlistenWindowMoved()
     unlistenWindowMoved = null
   }
-  if (wasDirLocked) {
-    if (petState.value === 'runningLeft' || petState.value === 'runningRight') {
-      petState.value = 'idle'
-      scheduleRandomAction()
-    }
+  // 拖拽结束：只要当前处于跑步状态就回到 idle（无论方向是 mousemove 预判还是 onMoved 切换设定的），
+  // 不依赖 dragDirLocked，避免只经预判设了方向却因未触发 onMoved 切换而卡在 running 状态。
+  if (petState.value === 'runningLeft' || petState.value === 'runningRight') {
+    petState.value = 'idle'
+    scheduleRandomAction()
   }
 }
 

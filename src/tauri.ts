@@ -65,14 +65,17 @@ export async function onEvent(
   return () => un()
 }
 
-/** 监听当前窗口的 Moved 事件（系统级拖拽时高频触发，可用于 debounce 兜底结束拖拽）。
+/** 监听当前窗口的 Moved 事件（系统级拖拽时高频触发，携带窗口新位置，
+ *  可用于拖拽全程持续判断移动方向，也可用于 debounce 兜底结束拖拽）。
  *  返回取消监听函数。非 Tauri 环境返回空函数。 */
 export async function onWindowMoved(
-  handler: () => void,
+  handler: (pos: { x: number; y: number }) => void,
 ): Promise<() => void> {
   if (!isTauri || !windowApi) return () => {}
   try {
-    const un = await windowApi.getCurrentWindow().onMoved(() => handler())
+    const un = await windowApi.getCurrentWindow().onMoved((e) => {
+      handler(e.payload as { x: number; y: number })
+    })
     return () => un()
   } catch (e) {
     console.error('[tauri] onWindowMoved failed', e)
