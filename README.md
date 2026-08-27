@@ -13,7 +13,7 @@
   - 单击 → 随机动作 + 性格搭话气泡
   - 双击 → 打开设置窗口
   - 悬停 → 张望（宠物 / 气泡可交互，透明区域点击穿透到桌面）
-- **缩放**：80% ~ 130% 可调（每 0.05 档），窗口跟随缩放（不重置位置）
+- **缩放**：50% ~ 130% 可调（每 0.05 档），默认 70%；窗口尺寸跟随缩放实时变化（以右下角为锚点，不重置位置）
 - **显示 / 隐藏**：托盘菜单「显示 / 隐藏宠物」或设置窗口切换，状态持久化
 - **宠物切换**：内置 3 只（Miku / 龙神丸 / Seedy）+ 本地 zip 导入 / 删除 / 编辑 + 在线画廊下载
 - **专属台词**：每只内置宠物有独立性格的搭话气泡（`src/pets/dialogues.ts`）
@@ -55,7 +55,7 @@ bash ./scripts/build.sh 0.2.0      # 或手动指定版本号
 
 ## 双窗口架构
 
-- **main**（宠物窗口）：无边框、透明、置顶、320×380，右下角常驻，承载 `PetHost` + `SpritePet`
+- **main**（宠物窗口）：无边框、透明、置顶，右下角常驻，承载 `PetHost` + `SpritePet`；尺寸由 `resize_pet_window`（Rust `pet_window_size`）按当前缩放动态计算（默认 scale=0.7 约 248×295，含 24px 透明缓冲），始终与精灵图渲染尺寸对齐，避免留白错位或被裁剪
 - **settings**（设置窗口）：680×500，居中、默认隐藏；双击宠物或托盘「打开设置」时打开；关闭时隐藏而非销毁，并记住最后拖动位置，下次打开恢复
 
 两个窗口是独立 webview，各自持有独立 store 实例。跨窗口状态（切换宠物 / 缩放 / 显隐）通过 Tauri 事件（`pet-switch` / `pet-scale` / `pet-visible`）广播同步，规避前端 emit 跨窗口不生效的问题。macOS 打开设置时切换 Dock 图标为 `Regular`（显示），关闭时切回 `Accessory`（隐藏）。
@@ -159,7 +159,7 @@ pet/                       # 外部宠物 zip 素材（开发用，可导入测�
 设置窗口「在线画廊」接入 [awesome-codex-pet](https://github.com/legeling/awesome-codex-pet)：
 
 - 浏览（`browse_online_pets`）：拉取 `pets.json` 索引，显示名优先中文（`localized_names.zh`），预览图来自 `https://codexpet.top/assets/previews/<slug>/webp/idle.webp`（404 时前端回退文字）
-- 下载（`download_online_pet`）：拉取 `<slug>/pet.json` + `spritesheet.webp`，复用 `build_pet_def` 组装并落盘到 `app_data_dir/pets/<slug>/`，随后刷新托盘菜单
+- 下载（`download_online_pet`）：拉取 `<slug>/pet.json` + `spritesheet.webp`，复用 `build_pet_def` 组装并落盘到 `app_data_dir/pets/<slug>/`，随后刷新托盘菜单；**下载成功后自动切换到该宠物**（跨窗口广播 `pet-switch`，main 宠物窗口实时生效），与本地导入行为一致
 
 ## 技术栈
 
