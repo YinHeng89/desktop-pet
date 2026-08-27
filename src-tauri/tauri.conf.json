@@ -24,7 +24,7 @@
         "maximizable": false,
         "minimizable": false,
         "skipTaskbar": true,
-        "visible": false,
+        "visible": true,
         "shadow": false,
         "acceptFirstMouse": true
       },
