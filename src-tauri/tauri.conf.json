@@ -15,8 +15,8 @@
       {
         "label": "main",
         "title": "PetBuddy",
-        "width": 320,
-        "height": 380,
+        "width": 248,
+        "height": 295,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,

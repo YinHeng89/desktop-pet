@@ -56,16 +56,12 @@ fn broadcast_event(app: tauri::AppHandle, event: String, payload: Option<serde_j
     let _ = app.emit(&event, payload);
 }
 
-/// 按宠物缩放比例重设 main 窗口尺寸。
-/// 缩放变化时调用：窗口跟随宠物一起缩放，保证气泡+宠物不被裁剪。
-/// scale 范围 0.8~1.3；宠物帧 192×208，窗口 = 气泡区 + 宠物区 + 留白。
-///
-/// 缩放时以窗口【右下角】为锚点重新定位：宠物贴窗口右下角，原地缩放不漂移。
-#[tauri::command]
-fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
-    let Some(w) = app.get_webview_window("main") else { return };
-    let scale = scale.clamp(0.8, 1.3);
-
+/// 按缩放比例计算 main 窗口的精确尺寸（逻辑像素）。
+/// 与前端 SpritePet / PetHost 的渲染尺寸保持一致：宠物帧 192×208，
+/// 窗口 = 气泡区(156) + 宠物区 + 底部留白 16 + 四周缓冲 24。
+/// 抽出为独立函数，供 setup 初始定位与 resize_pet_window 共用，避免两处公式漂移。
+fn pet_window_size(scale: f64) -> (f64, f64) {
+    let scale = scale.clamp(0.5, 1.3);
     let pet_w = (192.0 * scale).round();
     let pet_h = (208.0 * scale).round();
     let bubble_h = (156.0 * scale).round();
@@ -73,19 +69,37 @@ fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
     // 高：气泡区 + 宠物区 + 底部留白 16（scale=1 时 156+208+16=380）
     let ww = pet_w.max(320.0 * scale);
     let wh = bubble_h + pet_h + 16.0;
-
     // 缓冲：窗口比内容大一圈，避免缩放过程中宠物（canvas 已先按新 scale 渲染）
     // 短暂超出旧窗口被 OS 裁掉而闪。宠物贴窗口 right/bottom:16px，缓冲落在
     // 左/上透明区，不影响视觉锚点。
     let pad = 24.0;
-    let ww = ww + pad;
-    let wh = wh + pad;
+    (ww + pad, wh + pad)
+}
+
+/// 按宠物缩放比例重设 main 窗口尺寸。
+/// 缩放变化时调用：窗口跟随宠物一起缩放，保证气泡+宠物不被裁剪。
+/// scale 范围 0.5~1.3。
+///
+/// 缩放时以窗口【右下角】为锚点重新定位：宠物贴窗口右下角，原地缩放不漂移。
+#[tauri::command]
+fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    let (ww, wh) = pet_window_size(scale);
 
     // 关键时序：先读出【当前】位置与尺寸（旧值），再 set_size，最后用旧值算锚点
     // set_position。不能在 set_size 之后才 outer_size()——那时 OS 可能已改为新尺寸，
     // 旧位置 + 新宽度混用会让右下角算错，宠物每帧跳一下。
     let sf = w.scale_factor().unwrap_or(1.0);
     if let (Ok(pos), Ok(old)) = (w.outer_position(), w.outer_size()) {
+        // 幂等保护：新旧尺寸一致（误差 < 1 逻辑像素）时跳过，避免前端 onMounted
+        // 首次 resizePetWindow(默认 scale) 与 setup 已设好的尺寸相同时，仍触发
+        // 一次无谓的 set_size + set_position，导致透明窗口滑动瞬间重绘裁剪。
+        let old_w = old.width as f64 / sf;
+        let old_h = old.height as f64 / sf;
+        if (old_w - ww).abs() < 1.0 && (old_h - wh).abs() < 1.0 {
+            return;
+        }
+
         // 旧右下角屏幕坐标（物理像素）：调用前的位置 + 调用前的尺寸
         let right = pos.x + old.width as i32;
         let bottom = pos.y + old.height as i32;
@@ -243,12 +257,15 @@ fn main() {
                     // 初始定位：钉到屏幕右下角，避开任务栏。
                     // Windows 无 Dock，但有底部任务栏（Win11 约 48px 高），
                     // 用 64px 底边距 + 24px 右边距兜底，避免宠物被任务栏遮住。
+                    // 关键：窗口尺寸直接取「前端默认 scale=0.7」的精确值 248×295，
+                    // 与前端 onMounted 首次 resizePetWindow(0.7) 的结果完全一致，
+                    // 这样启动时窗口只被设置一次尺寸、且首帧就是最终尺寸，
+                    // 避免「320×380 → 344×404 → 248×295」多段 resize 造成的滑动裁剪。
+                    let (ww, wh) = pet_window_size(0.7);
                     if let Ok(monitor) = w.current_monitor() {
                         if let Some(mon) = monitor {
                             let size = mon.size();
                             let scale = mon.scale_factor();
-                            let ww = 320.0;
-                            let wh = 380.0;
                             let x = (size.width as f64 / scale) - ww - 24.0;
                             let y = (size.height as f64 / scale) - wh - 64.0;
                             let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
@@ -258,10 +275,6 @@ fn main() {
                     windows_pet::setup_notify_interactive(app.handle());
                     // 定位完成后再显示，避免先以默认位置闪现一帧再瞬移右下角。
                     let _ = w.show();
-                    // show 之后立即按 scale=1 的精确尺寸校正窗口，规避 visible:false 下
-                    // WebView2 surface 首次初始化尺寸错误导致的宠物右侧/下方被裁剪。
-                    // 定位已在 show 前完成，此处仅校正尺寸（右下角锚点保持不变）。
-                    resize_pet_window(app.handle().clone(), 1.0);
                 }
 
                 // settings 窗口：透明无边框窗口在 Windows 上仅靠 CSS border-radius 无法
