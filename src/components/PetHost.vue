@@ -5,8 +5,29 @@ import { petStore, currentPet, openPetPicker, setPetVisible, loadPetManifest, MI
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
 
-// 防止宠物多次切换/精灵图重复加载时重复 resize 窗口；只在首次 ready 时调整。
-let petReadyResized = false
+// 首屏窗口尺寸对齐：WebView2 的「窗口 resize 生效」与「canvas 内容首帧可见」存在异步延迟，
+// 且 Win10 比 Win11 更慢。一次性 resize 在内容可见前执行会导致首次显示不全、且不再重试
+// （Win10 上表现为「一直有问题」）。故在启动后短时间内做多重兜底 resize，确保最终对齐。
+let startupResizeActive = false
+let startupResizeTimers: ReturnType<typeof setTimeout>[] = []
+
+function scheduleStartupResize(): void {
+  if (startupResizeActive || !isTauri) return
+  startupResizeActive = true
+  const fire = () => void resizePetWindow(petStore.scale)
+  // 立即一次（精灵图已加载并绘制）
+  fire()
+  // rAF 后（canvas 首帧已 composited）再对齐一次
+  requestAnimationFrame(() => fire())
+  // 慢机器/Win10 兜底：延时再各对齐一次，覆盖 DWM 慢的情况
+  startupResizeTimers.push(setTimeout(fire, 200))
+  startupResizeTimers.push(setTimeout(fire, 450))
+  startupResizeTimers.push(
+    setTimeout(() => {
+      startupResizeActive = false
+    }, 600),
+  )
+}
 import SpritePet from './SpritePet.vue'
 
 // macOS 判断：macOS 由原生层（macos_pet.rs 的 NSTimer）驱动 hover/drag，
@@ -437,11 +458,9 @@ function stopDragging(): void {
 }
 
 function onPetReady(): void {
-  // 精灵图已加载并画出第一帧，此时按真实内容调整窗口尺寸。
-  // 只在首次 ready 时 resize：防止宠物切换/重新加载时频繁抖动窗口。
-  if (petReadyResized || !isTauri) return
-  petReadyResized = true
-  void resizePetWindow(petStore.scale)
+  // 精灵图已加载并绘制第一帧：触发首屏多重兜底 resize（见 scheduleStartupResize），
+  // 确保窗口尺寸最终与内容对齐，覆盖 Win10 等慢 compositor 的首次裁剪问题。
+  scheduleStartupResize()
 }
 
 function onPetClick(): void {
