@@ -25,7 +25,8 @@
         "minimizable": false,
         "skipTaskbar": true,
         "visible": true,
-        "shadow": false
+        "shadow": false,
+        "acceptFirstMouse": true
       },
       {
         "label": "settings",
