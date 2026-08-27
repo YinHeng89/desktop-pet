@@ -210,7 +210,7 @@ fn window_dpi_scale(hwnd: isize) -> f64 {
 }
 
 #[cfg(target_os = "windows")]
-fn apply_hit_rects(hwnd: isize) -> bool {
+pub fn apply_hit_rects(hwnd: isize) -> bool {
     use windows_sys::Win32::Graphics::Gdi::{
         CombineRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
     };
