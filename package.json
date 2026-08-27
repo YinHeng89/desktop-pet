@@ -1,7 +1,7 @@
 {
   "name": "petbuddy",
   "private": true,
-  "version": "0.1.31",
+  "version": "0.1.32",
   "type": "module",
   "description": "PetBuddy — 跨平台桌面宠物 + 通用通知接收器",
   "scripts": {
