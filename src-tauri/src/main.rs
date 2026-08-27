@@ -256,6 +256,12 @@ fn main() {
                         }
                     }
                     windows_pet::setup_notify_interactive(app.handle());
+                    // 定位完成后再显示，避免先以默认位置闪现一帧再瞬移右下角。
+                    let _ = w.show();
+                    // show 之后立即按 scale=1 的精确尺寸校正窗口，规避 visible:false 下
+                    // WebView2 surface 首次初始化尺寸错误导致的宠物右侧/下方被裁剪。
+                    // 定位已在 show 前完成，此处仅校正尺寸（右下角锚点保持不变）。
+                    resize_pet_window(app.handle().clone(), 1.0);
                 }
 
                 // settings 窗口：透明无边框窗口在 Windows 上仅靠 CSS border-radius 无法
