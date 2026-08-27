@@ -238,10 +238,12 @@ function reportInteractiveRects(): void {
       bubbleRect.height + bubbleShadowPad * 2,
     ])
   }
+  let hasPetRect = false
   const p = petStageEl.value
   if (p) {
     const r = p.getBoundingClientRect()
     if (r.width > 0 && r.height > 0) {
+      hasPetRect = true
       rects.push([
         r.left - petShadowPad,
         r.top - petShadowPad,
@@ -252,9 +254,15 @@ function reportInteractiveRects(): void {
   }
   // macOS：像素穿透用（NSTimer 轮询）
   void setNotifyInteractiveRects(rects)
-  // Windows：透明区域穿透用（SetWindowRgn 裁切，需显式 apply 即时生效）
+  // Windows：透明区域穿透用（SetWindowRgn 裁切，需显式 apply 即时生效）。
+  // 关键守卫：宠物元素尚未渲染（currentPet 异步加载未完成）时，若用「只有气泡、
+  // 没有宠物」的残缺矩形去 SetWindowRgn，会把整个宠物区域裁掉——表现为启动时
+  // 「偶尔异常」（取决于宠物清单加载快慢的竞态）。此时跳过 apply，保持整窗
+  // 可交互（不裁切），等宠物真正渲染出来后由 currentPet 的 watch 触发重新上报。
   void setPetHitRects(rects)
-  void applyPetHitRects()
+  if (hasPetRect) {
+    void applyPetHitRects()
+  }
 }
 
 // 气泡有 enter 动画（transform: translateY(10px) scale(0.96) → 最终态，0.3s），
