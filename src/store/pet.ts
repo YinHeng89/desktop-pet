@@ -37,10 +37,10 @@ const STORAGE_KEY_ID = 'petbuddy_id'
 const STORAGE_KEY_SCALE = 'petbuddy_scale'
 const STORAGE_KEY_VISIBLE = 'petbuddy_visible'
 
-export const MIN_SCALE = 0.6
+export const MIN_SCALE = 0.5
 export const MAX_SCALE = 1.3
-// 宠物默认显示大小(无用户偏好时)。介于 MIN_SCALE(0.6)~MAX_SCALE(1.3) 之间，
-// 取 0.7 让首屏宠物比原始 100% 更小巧；用户仍可在设置里 60%~130% 滑动调整。
+// 宠物默认显示大小(无用户偏好时)。介于 MIN_SCALE(0.5)~MAX_SCALE(1.3) 之间，
+// 取 0.7 让首屏宠物比原始 100% 更小巧；用户仍可在设置里 50%~130% 滑动调整。
 export const DEFAULT_SCALE = 0.7
 
 function loadId(): string {

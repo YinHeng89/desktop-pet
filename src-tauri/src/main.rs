@@ -80,13 +80,13 @@ fn broadcast_event(app: tauri::AppHandle, event: String, payload: Option<serde_j
 
 /// 按宠物缩放比例重设 main 窗口尺寸。
 /// 缩放变化时调用：窗口跟随宠物一起缩放，保证气泡+宠物不被裁剪。
-/// scale 范围 0.8~1.3；宠物帧 192×208，窗口 = 气泡区 + 宠物区 + 留白。
+/// scale 范围 0.5~1.3；宠物帧 192×208，窗口 = 气泡区 + 宠物区 + 留白。
 ///
 /// 缩放时以窗口【右下角】为锚点重新定位：宠物贴窗口右下角，原地缩放不漂移。
 #[tauri::command]
 fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
     let Some(w) = app.get_webview_window("main") else { return };
-    let scale = scale.clamp(0.8, 1.3);
+    let scale = scale.clamp(0.5, 1.3);
 
     let pet_w = (192.0 * scale).round();
     let pet_h = (208.0 * scale).round();
