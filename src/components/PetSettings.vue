@@ -115,7 +115,7 @@ async function saveEditPet(): Promise<void> {
 }
 
 // ── 缩放滑块（自绘：div 轨道 + 填充 + 圆点，像素级对齐）──
-// 复用 store 的 MIN_SCALE/MAX_SCALE（已放宽下限到 0.6），避免两处定义不一致
+// 复用 store 的 MIN_SCALE/MAX_SCALE（下限已放宽到 0.5），避免两处定义不一致
 const trackEl = ref<HTMLElement | null>(null)
 
 function scaleToPercent(scale: number): number {

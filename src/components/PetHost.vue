@@ -6,6 +6,12 @@ import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
 import SpritePet from './SpritePet.vue'
 
+// macOS 判断：macOS 由原生层（macos_pet.rs 的 NSTimer）驱动 hover/drag，
+// 因为 WebView 在 App 非激活时 mouseenter/mousedown 不可靠；点击/双击仍走 DOM @click/@dblclick。
+const isMac =
+  typeof navigator !== 'undefined' &&
+  (/Mac|iPhone|iPad|iPod/i.test(navigator.platform) || /Macintosh/i.test(navigator.userAgent))
+
 // ── 通知气泡（接收外部通知）──
 interface NotifyItem {
   id: number
@@ -132,7 +138,11 @@ function enqueueNotify(payload: { text?: string; action?: string; duration?: num
 }
 
 // ── hover 宠物 ──
+// hovered 守卫：原生 pet-hover 与 DOM mouseenter 可能先后触发同一状态，避免 waiting 动作重复播放。
+let hovered = false
 function onPetEnter(): void {
+  if (hovered) return
+  hovered = true
   if (petState.value === 'talk') return
   playAction('waiting', undefined, () => {
     if (petState.value === 'waiting') petState.value = 'idle'
@@ -140,6 +150,8 @@ function onPetEnter(): void {
   })
 }
 function onPetLeave(): void {
+  if (!hovered) return
+  hovered = false
   if (petState.value === 'waiting') {
     petState.value = 'idle'
     scheduleRandomAction()
@@ -310,6 +322,10 @@ let dragMovedTimer: ReturnType<typeof setTimeout> | null = null
 let unlistenWindowMoved: (() => void) | null = null
 
 function onPetMouseDown(e: MouseEvent): void {
+  // macOS：拖拽移动由原生层（NSTimer + setFrameOrigin）全权驱动，点击/双击由
+  // @click/@dblclick 处理。这里不注册 mousemove/mouseup 监听、也不调用 startDragging，
+  // 避免与原生拖拽抢移动造成抖动。
+  if (isMac) return
   // 双击兜底：Windows 上 startDragging 会吞掉 dblclick，这里用 mousedown 的 detail 直接拦截
   if (e.detail === 2) {
     openPetPicker()
@@ -374,6 +390,22 @@ function onPetDragMove(e: MouseEvent): void {
       unlistenWindowMoved = un
     })
     void startDragging()
+  }
+}
+
+// macOS 原生拖拽结束（Rust NSTimer 检测到松开左键后 emit pet-drag-end 触发）。
+// 与 Windows 的 stopDragging 独立：macOS 不走前端 mousemove 监听，方向由 pet-drag 事件驱动。
+function onNativeDragEnd(): void {
+  if (!dragging) return
+  dragging = false
+  // 拖拽松手后会紧跟一个 click 事件，需在其到达前保持 dragMoved=true 以忽略它；
+  // 留 80ms 延迟再复位，避免拖拽松手被误判成单击触发随机动作。
+  setTimeout(() => {
+    dragMoved = false
+  }, 80)
+  if (petState.value === 'runningLeft' || petState.value === 'runningRight') {
+    petState.value = 'idle'
+    scheduleRandomAction()
   }
 }
 
@@ -487,6 +519,26 @@ onMounted(async () => {
     // 托盘：显示/隐藏宠物
     onEvent('pet-toggle-visible', () => {
       setPetVisible(!petStore.visible)
+    })
+    // macOS：原生层 hover / drag 桥接（WebView 在 App 非激活时 mouseenter/mousedown 不可靠，
+    // 由 macos_pet.rs 的 NSTimer 命中检测后 emit 事件，前端只负责播放动作/清理状态）。
+    onEvent('pet-hover', (payload) => {
+      const over = Boolean(payload)
+      if (over) onPetEnter()
+      else onPetLeave()
+    })
+    onEvent('pet-drag-start', () => {
+      dragging = true
+      dragMoved = true // 拖拽后紧跟的 click 应被忽略
+    })
+    onEvent('pet-drag', (payload) => {
+      const dir = payload === 'left' ? 'runningLeft' : 'runningRight'
+      if (currentPet.value?.actions?.[dir] && petState.value !== dir) {
+        petState.value = dir
+      }
+    })
+    onEvent('pet-drag-end', () => {
+      onNativeDragEnd()
     })
   }
 
