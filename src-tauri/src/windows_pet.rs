@@ -222,6 +222,23 @@ pub fn apply_hit_rects(hwnd: isize) -> bool {
     use windows_sys::Win32::Graphics::Gdi::{
         CombineRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
     };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        RedrawWindow, RDW_ALLCHILDREN, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
+    };
+
+    // 强制 DWM 立即重新合成窗口内容(含 WebView 子窗口)。
+    // 慢机器/首帧场景下,仅 SetWindowRgn 的 bRedraw 只重画 frame 裁切区,
+    // 不保证 DWM 把 WebView 位图按新 region 重绘——表现为「只渲染出局部,
+    // 点一下(交互触发重绘)才恢复完整」。此处显式 RedrawWindow 强制同步合成,
+    // 消除首帧/慢机器上内容渲染不全的窗口。
+    let force_redraw = || unsafe {
+        RedrawWindow(
+            hwnd,
+            std::ptr::null(),
+            0,
+            RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN,
+        );
+    };
 
     // hwnd 为 0 视为无效
     if hwnd == 0 {
@@ -242,6 +259,7 @@ pub fn apply_hit_rects(hwnd: isize) -> bool {
         unsafe {
             SetWindowRgn(hwnd, 0, 1);
         }
+        force_redraw();
         return true;
     }
 
@@ -294,6 +312,11 @@ pub fn apply_hit_rects(hwnd: isize) -> bool {
             unsafe {
                 SetWindowRgn(hwnd, 0, 1);
             }
+            force_redraw();
+        } else {
+            // 成功:region 所有权已转移给系统。强制 DWM 重绘,
+            // 确保 WebView 内容按新裁切区域立即完整合成(消除首帧渲染不全)。
+            force_redraw();
         }
         true
     } else {
@@ -301,6 +324,7 @@ pub fn apply_hit_rects(hwnd: isize) -> bool {
         unsafe {
             SetWindowRgn(hwnd, 0, 1);
         }
+        force_redraw();
         true
     }
 }
