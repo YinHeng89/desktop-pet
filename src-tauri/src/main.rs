@@ -108,25 +108,23 @@ fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
             ((right as f64 - ww * sf).round()) as i32,
             ((bottom as f64 - wh * sf).round()) as i32,
         ));
-        // 尺寸/位置变更后必须重新应用命中矩形裁切：SetWindowRgn 的 region
-        // 是相对窗口左上角的像素区域，窗口 resize/reposition 后旧 region 不会
-        // 自动跟随——若不重裁，区域外那圈透明窗口（方形轮廓）会露出来，
-        // 尤其在气泡出现、窗口尺寸随 scale 变化的瞬间最明显（Windows 上表现为
-        // "隐约的 Windows 窗口"）。前端已上报的 HIT_RECTS 仍是当前有效值，直接复用。
+        // 尺寸/位置变更后，WebView2 渲染子窗口可能随 resize 重建（HWND 变化），
+        // 旧的子类化钩子会失效。这里幂等重装一次 WM_NCHITTEST 子类化
+        // （已子类化的窗口会跳过，新出现的子窗口会被挂上）。
         #[cfg(target_os = "windows")]
         {
             if let Ok(hwnd) = w.hwnd() {
-                windows_pet::apply_hit_rects(hwnd.0 as isize);
+                windows_pet::install_click_through(hwnd.0 as isize);
             }
         }
     } else {
         // 读不到旧状态（极端情况）时退化为仅改尺寸，避免窗口卡死
         let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
-        // 同上：仅改尺寸也需重裁，避免露出窗口轮廓
+        // 同上：resize 后幂等重装子类化
         #[cfg(target_os = "windows")]
         {
             if let Ok(hwnd) = w.hwnd() {
-                windows_pet::apply_hit_rects(hwnd.0 as isize);
+                windows_pet::install_click_through(hwnd.0 as isize);
             }
         }
     }
@@ -323,6 +321,17 @@ fn main() {
                     // 定位已在 show 前完成，此处仅校正尺寸（右下角锚点保持不变），
                     // 且与前端 onMounted 的 resizePetWindow(默认scale) 口径一致，不再二次跳动。
                     resize_pet_window(app.handle().clone(), 0.7);
+                    // 关键：WebView2 的渲染子窗口(Chrome_WidgetWin_0 等)在窗口首次 show 后
+                    // 由异步初始化创建，此刻可能尚未就绪。延到主线程下一个 tick 再幂等重装
+                    // 一次子类化，确保子窗口被枚举到并挂上 WM_NCHITTEST 钩子（父窗口已挂，跳过）。
+                    let handle = app.handle().clone();
+                    let _ = app.run_on_main_thread(move || {
+                        if let Some(mw) = handle.get_webview_window("main") {
+                            if let Ok(hwnd) = mw.hwnd() {
+                                windows_pet::install_click_through(hwnd.0 as isize);
+                            }
+                        }
+                    });
                 }
 
                 // settings 窗口：透明无边框窗口在 Windows 上仅靠 CSS border-radius 无法
