@@ -4,6 +4,12 @@
 
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
+// 同步判断当前是否 Windows 平台（基于浏览器 UA，Tauri webview 在 Windows 上 UA 含 "Windows"）。
+// 用于仅在 Windows 侧启用 SetWindowRgn 竞态缓解（双 rAF 后再 apply），
+// macOS 走 NSTimer 动态穿透、applyPetHitRects 为 no-op，无需此延迟。
+export const isWindows =
+  typeof navigator !== 'undefined' && /windows/i.test(navigator.userAgent)
+
 // 当前 webview 所属窗口的 label（用于多窗口路由：main=宠物窗口，settings=设置窗口）。
 // 同步读 Tauri 注入的 __TAURI_INTERNALS__.metadata.currentWindow.label。
 // 该字段在 webview 创建时即存在（不依赖任何异步注入），首帧即可正确路由，无竞态。

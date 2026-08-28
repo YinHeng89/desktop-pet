@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
-import { isTauri, onEvent, updateInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow, onWindowMoved } from '../tauri'
+import { isTauri, isWindows, onEvent, updateInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow, onWindowMoved } from '../tauri'
 import { petStore, currentPet, openPetPicker, setPetVisible, setCurrentPet, loadPetManifest, MIN_SCALE, MAX_SCALE } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
@@ -272,7 +272,17 @@ function reportInteractiveRects(): void {
   // 注意：macOS 走 NSTimer 动态穿透，不需要 applyPetHitRects，但多调用一次 harmless。
   void setPetHitRects(rects)
   if (hasPetRect) {
-    void applyPetHitRects()
+    // Windows 竞态缓解：SetWindowRgn 的 bRedraw=1 只是向 DWM 投递重绘请求、
+    // 同步返回，WebView2 真正把新 region 对应的帧合成落地是异步的。
+    // 若内容尚未稳定就裁切，会偶发"裁到旧帧/空白帧"的硬边穿透。
+    // 用双 requestAnimationFrame 把 apply 推到浏览器已渲染两帧之后再执行，
+    // 大幅降低撞上该竞态的概率（治标但不依赖无可靠回调的"合成完成"信号）。
+    // macOS 下 applyPetHitRects 为 no-op，不包 rAF、直接调，避免无意义的 2 帧延迟。
+    if (isWindows) {
+      requestAnimationFrame(() => requestAnimationFrame(() => void applyPetHitRects()))
+    } else {
+      void applyPetHitRects()
+    }
   }
 }
 
@@ -496,7 +506,12 @@ watch(
       void showPetWindow()
       // Windows：窗口从 hide 恢复后 SetWindowRgn 的 region 可能失效，
       // 需重新把当前命中矩形应用到窗口，否则会露出系统窗口边框/矩形轮廓。
-      void applyPetHitRects()
+      // 同样包双 rAF，避免恢复可见瞬间立刻裁切撞上 WebView2 合成竞态。
+      if (isWindows) {
+        requestAnimationFrame(() => requestAnimationFrame(() => void applyPetHitRects()))
+      } else {
+        void applyPetHitRects()
+      }
     } else {
       void hidePetWindow()
     }
