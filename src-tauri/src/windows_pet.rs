@@ -80,17 +80,14 @@ pub fn hide_pet_window(app: tauri::AppHandle) {
 /// 设置窗口是普通无边框卡片窗口，需要「圆角 + 悬浮投影」的精致外观。
 /// 宠物窗口因需要整窗穿透(用自己的方案),与设置窗口互不干扰。
 #[cfg(target_os = "windows")]
-pub fn setup_window_rounded_corners(hwnd_raw: isize) {
+pub fn setup_window_rounded_corners(hwnd: isize) {
     use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
-    use windows_sys::Win32::Foundation::HWND;
 
-    if hwnd_raw == 0 {
+    if hwnd == 0 {
         return;
     }
 
-    // Win32 API 第一参数是 HWND newtype，这里统一转一下（入口是 isize）。
-    let hwnd = HWND(hwnd_raw);
-
+    // windows-sys v0.52 中 HWND 是 isize 的 type alias，可直接作为 Win32 函数参数。
     // DWMWINDOWATTRIBUTE 枚举值(硬编码避免不同 windows-sys 版本命名差异)：
     //   DWMWA_WINDOW_CORNER_PREFERENCE = 33
     //   DWMWA_SHADOW                  = 2   (开启/关闭系统阴影)
@@ -132,12 +129,10 @@ pub fn setup_window_rounded_corners(_hwnd: isize) {}
 /// 显示器上时会动态更新,这是 Windows 10 1607+ 推荐的正确做法。
 /// 仅当它返回 0(极少见)时,才退回 GetDeviceCaps 兜底。
 #[cfg(target_os = "windows")]
-fn window_dpi_scale(hwnd_raw: isize) -> f64 {
+fn window_dpi_scale(hwnd: isize) -> f64 {
     use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 
-    // Win32 API 第一参数是 HWND newtype，这里统一转一下（入口是 isize）。
-    let hwnd = windows_sys::Win32::Foundation::HWND(hwnd_raw);
-
+    // windows-sys v0.52 中 HWND = isize，hwnd 可直接传给 Win32 函数。
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi > 0 {
         return dpi as f64 / 96.0;
@@ -184,8 +179,9 @@ fn compute_should_ignore(w: &tauri::WebviewWindow) -> Option<bool> {
     }
 
     // 用窗口自身的 hwnd 取 DPI,保证「矩形换算」与「窗口实际所在屏」一致。
+    // windows-sys v0.52 的 HWND 是 isize alias，hwnd() 返回的即是 isize。
     let hwnd = match w.hwnd() {
-        Ok(h) => h.0 as isize,
+        Ok(h) => h,
         Err(_) => return None,
     };
     let scale = window_dpi_scale(hwnd);

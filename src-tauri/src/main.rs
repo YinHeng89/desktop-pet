@@ -313,7 +313,7 @@ fn main() {
                 // 真正裁切窗口边角，需要调用 DWM 设置系统级圆角（Windows 11）。
                 if let Some(w) = app.get_webview_window("settings") {
                     if let Ok(hwnd) = w.hwnd() {
-                        windows_pet::setup_window_rounded_corners(hwnd.0 as isize);
+                        windows_pet::setup_window_rounded_corners(hwnd as isize);
                     }
                 }
             }
