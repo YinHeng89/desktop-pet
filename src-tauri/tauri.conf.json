@@ -56,9 +56,7 @@
       "icons/icon.png"
     ],
     "macOS": {
-      "infoPlistExtend": {
-        "LSUIElement": true
-      }
+      "infoPlist": "./Info.plist"
     }
   }
 }
