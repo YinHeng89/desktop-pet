@@ -222,17 +222,18 @@ pub fn apply_hit_rects(hwnd: isize) -> bool {
     use windows_sys::Win32::Graphics::Gdi::{
         CombineRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{InvalidateRect, UpdateWindow};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW;
 
     // 强制 DWM 立即重新合成窗口内容(含 WebView 子窗口)。
     // 慢机器/首帧场景下,仅 SetWindowRgn 的 bRedraw 只重画 frame 裁切区,
     // 不保证 DWM 把 WebView 位图按新 region 重绘——表现为「只渲染出局部,
-    // 点一下(交互触发重绘)才恢复完整」。此处 InvalidateRect+UpdateWindow 强制
-    // 同步重绘整窗(等价 RedrawWindow 的 RDW_INVALIDATE|RDW_UPDATENOW),
-    // 消除首帧/慢机器上内容渲染不全的现象。
+    // 点一下(交互触发重绘)才恢复完整」。此处向窗口投递 WM_PAINT(0x000F)
+    // 强制一次绘制,复现「点击后恢复完整」的重绘效果,消除首帧渲染不全。
+    // 注:windows-sys 0.52 的 RedrawWindow/InvalidateRect/UpdateWindow 在本项目
+    // feature 下未暴露,改用最基础的 SendMessageW + WM_PAINT 字面量,避免符号缺失。
     let force_redraw = || unsafe {
-        InvalidateRect(hwnd, std::ptr::null(), 1);
-        UpdateWindow(hwnd);
+        const WM_PAINT: u32 = 0x000F;
+        SendMessageW(hwnd, WM_PAINT, 0, 0);
     };
 
     // hwnd 为 0 视为无效
