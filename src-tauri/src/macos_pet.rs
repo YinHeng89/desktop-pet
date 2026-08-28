@@ -27,6 +27,7 @@
 // 均发生在主线程（NSTimer 回调），避免「Must only be used from the main thread」崩溃。
 
 use std::sync::Mutex;
+use objc2_foundation::{NSPoint, NSRect};
 
 // 可交互矩形（CSS 坐标，相对宠物窗口(main)内容区左上角）：(x, y, w, h)
 // 复用跨平台共享类型,保证与 Windows 端语义一致。
@@ -36,6 +37,19 @@ static INTERACTIVE_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 // 避免 NSTimer 在矩形为空时把窗口误判为「穿透」。
 static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
 
+// ── 性能优化缓存（模块顶层,供 store_interactive_rects 与 tick 共用）──
+// 记录上一次处理的鼠标位置与窗口 frame,两者都未变化时 tick 直接跳过。
+static LAST_MOUSE: Mutex<NSPoint> = Mutex::new(NSPoint { x: f64::MIN, y: f64::MIN });
+static LAST_FRAME: Mutex<NSRect> = Mutex::new(NSRect {
+    origin: NSPoint { x: f64::MIN, y: f64::MIN },
+    size: objc2_foundation::NSSize {
+        width: 0.0,
+        height: 0.0,
+    },
+});
+// 前端上报新交互矩形后置 true,强制下一次 tick 重算穿透(即使鼠标/窗口未动)。
+static RECTS_DIRTY: Mutex<bool> = Mutex::new(true);
+
 /// 内部：存储可交互矩形（供跨平台统一命令 update_interactive_rects 调用）。
 pub(crate) fn store_interactive_rects(rects: &[Rect]) {
     let non_empty = !rects.is_empty();
@@ -44,6 +58,11 @@ pub(crate) fn store_interactive_rects(rects: &[Rect]) {
     }
     if let Ok(mut init) = RECTS_INITIALIZED.lock() {
         *init = non_empty;
+    }
+    // 标记 rects 已更新,强制下一次 tick 重算穿透(即使鼠标/窗口未动,
+    // 否则新交互区要等鼠标移动才生效)。
+    if let Ok(mut d) = RECTS_DIRTY.lock() {
+        *d = true;
     }
 }
 
@@ -81,6 +100,7 @@ fn hit_interactive(x: f64, y: f64) -> bool {
 mod macos_impl {
     use super::hit_interactive;
     use super::rects_initialized;
+    use super::{LAST_FRAME, LAST_MOUSE, RECTS_DIRTY};
     use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Method, Sel};
     use objc2::{class, define_class, msg_send, sel, ClassType};
     use core::ffi::c_char;
@@ -155,6 +175,40 @@ mod macos_impl {
                     let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
                     // 宠物窗口(main) frame（屏幕坐标，左下原点）
                     let frame: NSRect = msg_send![window, frame];
+
+                    // ── 性能优化：输入未变化时短路 ──
+                    // 拖拽进行中必须每帧跑(跟随鼠标)，不短路。
+                    // 否则仅当「鼠标位置变化」或「窗口 frame 变化」或「rects 刚更新」
+                    // 才继续处理；三者都未变则直接返回，跳过后续所有 objc 调用与重算
+                    // (尤其是 setIgnoresMouseEvents: 的属性重算与 hover 锁竞争)，
+                    // 让宠物静止时进程可休眠，降低常驻 CPU 占用。
+                    let drag_active = *DRAG_ACTIVE.lock().unwrap();
+                    if !drag_active {
+                        let rects_dirty = {
+                            let mut d = RECTS_DIRTY.lock().unwrap();
+                            let v = *d;
+                            if v {
+                                *d = false; // 消费一次,下次恢复按鼠标/窗口变化判断
+                            }
+                            v
+                        };
+                        if !rects_dirty {
+                            let last_m = *LAST_MOUSE.lock().unwrap();
+                            let last_f = *LAST_FRAME.lock().unwrap();
+                            let mouse_same = (mouse.x - last_m.x).abs() < 0.5
+                                && (mouse.y - last_m.y).abs() < 0.5;
+                            let frame_same = (frame.origin.x - last_f.origin.x).abs() < 0.5
+                                && (frame.origin.y - last_f.origin.y).abs() < 0.5;
+                            if mouse_same && frame_same {
+                                // 无任何输入变化:跳过本次 tick,不做穿透/hover/拖拽处理
+                                return;
+                            }
+                        }
+                    }
+                    // 记录当前输入,供下次比对(无论是否短路都更新,保证脏 rects 消费后
+                    // 下一次能用真实值判断)
+                    *LAST_MOUSE.lock().unwrap() = mouse;
+                    *LAST_FRAME.lock().unwrap() = frame;
 
                     // 鼠标在窗口内的位置，转「左上原点」CSS 坐标（与前端对齐）：
                     let wx = mouse.x - frame.origin.x;
