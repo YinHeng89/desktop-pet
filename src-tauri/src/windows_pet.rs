@@ -195,7 +195,7 @@ unsafe extern "system" fn hit_test_subclass(
     // 取出原 WndProc(子类化时已存进 SUBCLASSED 表;此刻 GetWindowLongPtrW 返回的是
     // 我们自己的函数指针,不能再用它取原值)。
     let original: WNDPROC = match SUBCLASSED.lock() {
-        Ok(g) => g.get(&hwnd).map(|e| e.original),
+        Ok(g) => g.get(&hwnd).and_then(|e| e.original),
         Err(_) => None,
     };
 
