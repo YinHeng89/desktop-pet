@@ -303,7 +303,7 @@ unsafe fn try_subclass_webview_child(main_hwnd: isize) {
 /// 优先类名匹配 WebView2/Chrome_WidgetWin;否则取面积最大的子窗口
 /// (WebView2 通常占满主窗口,作为兜底)。
 #[cfg(target_os = "windows")]
-fn pick_webview_child(c: &ChildCollector) -> isize {
+unsafe fn pick_webview_child(c: &ChildCollector) -> isize {
     if !c.matches.is_empty() {
         return c.matches[0];
     }
