@@ -36,6 +36,8 @@ use std::time::Duration;
 use crate::geometry::Rect;
 #[cfg(target_os = "windows")]
 use crate::geometry::point_in_rects;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Foundation::HWND;
 // 以下静态/常量/函数只在 Windows 的穿透轮询中使用;非 Windows 平台无调用方,
 // 故统一标 #[cfg(target_os = "windows")],避免 macOS 编译报 dead_code。
 #[cfg(target_os = "windows")]
@@ -80,14 +82,14 @@ pub fn hide_pet_window(app: tauri::AppHandle) {
 /// 设置窗口是普通无边框卡片窗口，需要「圆角 + 悬浮投影」的精致外观。
 /// 宠物窗口因需要整窗穿透(用自己的方案),与设置窗口互不干扰。
 #[cfg(target_os = "windows")]
-pub fn setup_window_rounded_corners(hwnd: isize) {
+pub fn setup_window_rounded_corners(hwnd: HWND) {
     use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 
-    if hwnd == 0 {
+    // HWND 在 windows-sys 中不是整数，空句柄用 is_null() 判断。
+    if hwnd.is_null() {
         return;
     }
 
-    // windows-sys v0.52 中 HWND 是 isize 的 type alias，可直接作为 Win32 函数参数。
     // DWMWINDOWATTRIBUTE 枚举值(硬编码避免不同 windows-sys 版本命名差异)：
     //   DWMWA_WINDOW_CORNER_PREFERENCE = 33
     //   DWMWA_SHADOW                  = 2   (开启/关闭系统阴影)
@@ -129,10 +131,10 @@ pub fn setup_window_rounded_corners(_hwnd: isize) {}
 /// 显示器上时会动态更新,这是 Windows 10 1607+ 推荐的正确做法。
 /// 仅当它返回 0(极少见)时,才退回 GetDeviceCaps 兜底。
 #[cfg(target_os = "windows")]
-fn window_dpi_scale(hwnd: isize) -> f64 {
+fn window_dpi_scale(hwnd: HWND) -> f64 {
     use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 
-    // windows-sys v0.52 中 HWND = isize，hwnd 可直接传给 Win32 函数。
+    // hwnd 是 HWND 类型，可直接传给 Win32 函数。
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi > 0 {
         return dpi as f64 / 96.0;
