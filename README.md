@@ -58,7 +58,7 @@ bash ./scripts/build.sh 0.2.0      # 或手动指定版本号
 - **main**（宠物窗口）：无边框、透明、置顶，右下角常驻，承载 `PetHost` + `SpritePet`；尺寸由 `resize_pet_window`（Rust `pet_window_size`）按当前缩放动态计算（默认 scale=0.7 约 248×295，含 24px 透明缓冲），始终与精灵图渲染尺寸对齐，避免留白错位或被裁剪
 - **settings**（设置窗口）：680×500，居中、默认隐藏；双击宠物或托盘「打开设置」时打开；关闭时隐藏而非销毁，并记住最后拖动位置，下次打开恢复
 
-两个窗口是独立 webview，各自持有独立 store 实例。跨窗口状态（切换宠物 / 缩放 / 显隐）通过 Tauri 事件（`pet-switch` / `pet-scale` / `pet-visible`）广播同步，规避前端 emit 跨窗口不生效的问题。macOS 打开设置时切换 Dock 图标为 `Regular`（显示），关闭时切回 `Accessory`（隐藏）。
+两个窗口是独立 webview，各自持有独立 store 实例。跨窗口状态（切换宠物 / 缩放 / 显隐）通过 Tauri 事件（`pet-switch` / `pet-scale` / `pet-visible`）广播同步，规避前端 emit 跨窗口不生效的问题。macOS 为纯托盘模式：通过 `tauri.conf.json` 的 `bundle.macOS.infoPlistExtend.LSUIElement=true` 静态声明 Agent/Accessory，dev 与 release 启动即隐藏 Dock 图标，行为一致（不再运行时切换 `setActivationPolicy`，避免 dev/release 表现相反）。
 
 ## 通知接口（供外部应用调用）
 
