@@ -6,7 +6,7 @@ mod windows_pet;
 mod pet_import;
 mod notify_server;
 
-use tauri::{Emitter, Listener, Manager};
+use tauri::{ActivationPolicy, Emitter, Listener, Manager};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::WindowEvent;
@@ -163,6 +163,12 @@ fn save_settings_window_pos(app: &tauri::AppHandle, x: f64, y: f64) {
 /// 打开设置窗口（首次居中，之后恢复到上次关闭前的位置；已存在则复用）。
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle) {
+    // macOS：打开设置时把 App 从 Accessory（纯托盘、不占 Dock）提升为 Regular，
+    // 让设置窗口出现在 Dock + Cmd+Tab 里，方便用户切回。关闭设置时再降回 Accessory。
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(ActivationPolicy::Regular);
+    }
     if let Some(w) = app.get_webview_window("settings") {
         // 仅当从未保存过位置时才居中（固定首次默认位置）；
         // 之后都恢复到用户拖动后的最后位置，避免每次打开都被重置到屏幕中心。
@@ -171,7 +177,19 @@ fn open_settings_window(app: tauri::AppHandle) {
         }
         let _ = w.show();
         let _ = w.unminimize();
-        let _ = w.set_focus();
+        // Accessory→Regular 切换瞬间，set_focus 偶发不生效（窗口的 activate 与
+        // policy 变更同帧竞争）。延到下一个主线程 tick 再 focus，确保设置窗口置顶。
+        #[cfg(target_os = "macos")]
+        {
+            let wh = w.clone();
+            let _ = app.run_on_main_thread(move || {
+                let _ = wh.set_focus();
+            });
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = w.set_focus();
+        }
     }
 }
 
@@ -180,6 +198,11 @@ fn open_settings_window(app: tauri::AppHandle) {
 fn close_settings_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("settings") {
         let _ = w.hide();
+    }
+    // macOS：设置关闭后把 App 降回 Accessory，退出 Dock + Cmd+Tab，回到纯托盘。
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(ActivationPolicy::Accessory);
     }
 }
 
@@ -258,6 +281,10 @@ fn main() {
                     // 安装穿透（作用于 main 宠物窗口）
                     macos_pet::setup_notify_interactive(app.handle());
                     let _ = w.show();
+                    // 启动时显式设为 Accessory：纯托盘、不占 Dock。
+                    // 即便 Info.plist 的 LSUIElement=true 已保证初始为 Agent，这里再
+                    // 显式设一次可兼容 `tauri dev`（dev 不读 Info.plist，必须运行时切）。
+                    let _ = app.set_activation_policy(ActivationPolicy::Accessory);
                 }
             }
 
@@ -367,6 +394,11 @@ fn main() {
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = window.hide();
+                        // macOS：经此路径关闭设置窗口时也要降回 Accessory，否则 Dock 残留。
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = window.app_handle().set_activation_policy(ActivationPolicy::Accessory);
+                        }
                     }
                     // 用户拖动设置窗口时实时保存最后位置，下次打开恢复（而非重置居中）
                     WindowEvent::Moved(pos) => {
