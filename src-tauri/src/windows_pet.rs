@@ -33,7 +33,8 @@ use tauri::Manager;
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, GetClassNameW, GetClientRect, HTCLIENT, HTTRANSPARENT, WM_NCHITTEST,
+    EnumChildWindows, GetClassNameW, GetClientRect, HTCLIENT, HTTRANSPARENT, IsWindow, KillTimer,
+    SetTimer, WM_NCHITTEST,
 };
 // ScreenToClient 在 windows-sys 0.52 中归在 Win32::Graphics::Gdi 模块(而非 WindowsAndMessaging)。
 #[cfg(target_os = "windows")]
@@ -50,6 +51,19 @@ static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
 
 #[cfg(target_os = "windows")]
 const LOGPIXELSX: i32 = 88; // GDI 常量:每逻辑英寸像素数(X 方向),仅兜底路径用
+#[cfg(target_os = "windows")]
+const HITTEST_SUBCLASS_ID: usize = 1; // 主窗口 WM_NCHITTEST 子类 id
+#[cfg(target_os = "windows")]
+const CHILD_SUBCLASS_ID: usize = 2; // WebView2 子窗口 WM_NCHITTEST 子类 id
+#[cfg(target_os = "windows")]
+const RETRY_TIMER_ID: usize = 0x5001; // 重试子类化 WebView2 子窗口的定时器 id
+// 已子类化的 WebView2 子窗口 HWND(0=尚未找到)。避免对同一子窗口重复子类化,
+// 也用于检测 WebView2 是否重建了子窗口(此时记录失效,需重新查找)。
+#[cfg(target_os = "windows")]
+static WEBVIEW_CHILD_HWND: Mutex<isize> = Mutex::new(0);
+// 供重试定时器回调读取主窗口 HWND(回调里没有 ref_data 可用)。
+#[cfg(target_os = "windows")]
+static MAIN_HWND_FOR_TIMER: Mutex<isize> = Mutex::new(0);
 
 /// 内部:存储可交互矩形(供跨平台统一命令 update_interactive_rects 调用)。
 pub(crate) fn store_hit_rects(rects: &[Rect]) {
@@ -211,53 +225,119 @@ fn window_dpi_scale(hwnd: isize) -> f64 {
 /// WebView2 而非穿透到桌面。因此除父类(主窗口)外,还要找到 WebView2 子窗口一并子类化:
 /// 子类对区域外返回 HTTRANSPARENT,该命中结果会向上冒泡到父类,父类同样返回
 /// HTTRANSPARENT,最终 OS 把点击交给我们下方的窗口(桌面/其他程序)。
+///
+/// 关键时机问题:WebView2 的子 HWND 是**异步初始化**的——Tauri 主窗口创建后,
+/// WebView2 environment/controller 才在另一个线程把子窗口挂上来。如果在窗口创建
+/// 回调里只枚举一次子窗口,往往子窗口还没生出来,导致 WebView2 那一层从未被子类化,
+/// 区域外点击全部被 Chromium 吞掉(表现为「透明区域穿透没生效」)。因此用定时器
+/// 周期性重试,直到找到并子类化 WebView2 子窗口为止(找到后停表)。
 #[cfg(target_os = "windows")]
 pub fn install_hit_test_subclass(main_hwnd: isize) {
     if main_hwnd == 0 {
         return;
     }
     unsafe {
-        // 1) 主窗口自身
-        let _ = SetWindowSubclass(main_hwnd, Some(hit_test_subclass), 1, main_hwnd as usize);
-
-        // 2) 找到 WebView2 子窗口并同样子类化
-        let mut collector = ChildCollector {
-            matches: Vec::new(),
-            all: Vec::new(),
-        };
-        EnumChildWindows(
-            main_hwnd,
-            Some(collect_child),
-            &mut collector as *mut _ as LPARAM,
-        );
-        let child = if !collector.matches.is_empty() {
-            collector.matches[0]
-        } else if collector.all.len() == 1 {
-            collector.all[0]
-        } else {
-            // 取客户端面积最大的子窗口(WebView2 通常占满主窗口)
-            let mut best: HWND = 0;
-            let mut best_area: i64 = 0;
-            for &h in &collector.all {
-                let mut r = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                };
-                if GetClientRect(h, &mut r) != 0 {
-                    let area = (r.right - r.left) as i64 * (r.bottom - r.top) as i64;
-                    if area > best_area {
-                        best_area = area;
-                        best = h;
-                    }
-                }
-            }
-            best
-        };
-        if child != 0 {
-            let _ = SetWindowSubclass(child, Some(hit_test_subclass), 1, main_hwnd as usize);
+        // 记录主窗口 HWND 供定时器回调使用
+        if let Ok(mut m) = MAIN_HWND_FOR_TIMER.lock() {
+            *m = main_hwnd;
         }
+        // 1) 主窗口自身立即子类化(同步可用)
+        let _ = SetWindowSubclass(
+            main_hwnd,
+            Some(hit_test_subclass),
+            HITTEST_SUBCLASS_ID,
+            main_hwnd as usize,
+        );
+        // 2) 立即尝试子类化 WebView2 子窗口(可能已就绪,也可能还没生出来)
+        try_subclass_webview_child(main_hwnd);
+        // 3) 启动重试定时器:每 400ms 重新枚举子窗口,直到找到 WebView2 子窗口并子类化。
+        //    用 TimerProc 回调(不依赖 subclass 收到 WM_TIMER),更稳健。
+        let _ = SetTimer(main_hwnd, RETRY_TIMER_ID, 400, Some(retry_timer_proc));
+    }
+}
+
+/// 查找并子类化 WebView2 子窗口(命中测试穿透生效的关键)。
+/// 已成功子类化且窗口仍有效则直接返回;若之前记录的子窗口已失效(WebView2 重建),
+/// 则清空记录重新查找。找到后停止重试定时器。
+#[cfg(target_os = "windows")]
+unsafe fn try_subclass_webview_child(main_hwnd: isize) {
+    if main_hwnd == 0 {
+        return;
+    }
+    // 已子类化且窗口仍有效 → 无需重复
+    {
+        let mut stored = WEBVIEW_CHILD_HWND
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if *stored != 0 && IsWindow(*stored) != 0 {
+            return;
+        }
+        *stored = 0;
+    }
+    let mut collector = ChildCollector {
+        matches: Vec::new(),
+        all: Vec::new(),
+    };
+    EnumChildWindows(
+        main_hwnd,
+        Some(collect_child),
+        &mut collector as *mut _ as LPARAM,
+    );
+    let child = pick_webview_child(&collector);
+    if child != 0 {
+        let _ = SetWindowSubclass(
+            child,
+            Some(hit_test_subclass),
+            CHILD_SUBCLASS_ID,
+            main_hwnd as usize,
+        );
+        if let Ok(mut stored) = WEBVIEW_CHILD_HWND.lock() {
+            *stored = child;
+        }
+        // 找到并子类化成功,停止重试定时器(之后若 WebView2 重建会被重新检测到)
+        let _ = KillTimer(main_hwnd, RETRY_TIMER_ID);
+    }
+}
+
+/// 从枚举结果中挑选 WebView2 子窗口:
+/// 优先类名匹配 WebView2/Chrome_WidgetWin;否则取面积最大的子窗口
+/// (WebView2 通常占满主窗口,作为兜底)。
+#[cfg(target_os = "windows")]
+fn pick_webview_child(c: &ChildCollector) -> isize {
+    if !c.matches.is_empty() {
+        return c.matches[0];
+    }
+    if c.all.len() == 1 {
+        return c.all[0];
+    }
+    let mut best: HWND = 0;
+    let mut best_area: i64 = 0;
+    for &h in &c.all {
+        let mut r = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetClientRect(h, &mut r) != 0 {
+            let area = (r.right - r.left) as i64 * (r.bottom - r.top) as i64;
+            if area > best_area {
+                best_area = area;
+                best = h;
+            }
+        }
+    }
+    best
+}
+
+/// SetTimer 的 TimerProc 回调:周期性尝试子类化 WebView2 子窗口。
+/// 不直接用 WM_TIMER 是因为它依赖我们的 subclass 收到该消息,而本定时器跑在独立回调里,
+/// 读取 MAIN_HWND_FOR_TIMER 即可拿到主窗口 HWND。
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn retry_timer_proc(_hwnd: HWND, _msg: u32, _id: usize, _time: u32) {
+    let main = MAIN_HWND_FOR_TIMER.lock().map(|g| *g).unwrap_or(0);
+    if main != 0 {
+        try_subclass_webview_child(main);
     }
 }
 
