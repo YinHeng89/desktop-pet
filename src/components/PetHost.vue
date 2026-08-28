@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
-import { isTauri, onEvent, setNotifyInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow, onWindowMoved } from '../tauri'
+import { isTauri, onEvent, updateInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow, onWindowMoved } from '../tauri'
 import { petStore, currentPet, openPetPicker, setPetVisible, setCurrentPet, loadPetManifest, MIN_SCALE, MAX_SCALE } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
@@ -252,13 +252,15 @@ function reportInteractiveRects(): void {
       ])
     }
   }
-  // macOS：像素穿透用（NSTimer 轮询）
-  void setNotifyInteractiveRects(rects)
-  // Windows：透明区域穿透用（SetWindowRgn 裁切，需显式 apply 即时生效）。
+  // 统一上报可交互矩形（macOS/Windows 同一入口；Linux 目前 no-op）。
+  // 旧接口 setNotifyInteractiveRects / setPetHitRects 仍保留作兼容，但统一走此处。
+  void updateInteractiveRects(rects)
+  // Windows：SetWindowRgn 裁切需显式 apply 即时生效。
   // 关键守卫：宠物元素尚未渲染（currentPet 异步加载未完成）时，若用「只有气泡、
   // 没有宠物」的残缺矩形去 SetWindowRgn，会把整个宠物区域裁掉——表现为启动时
   // 「偶尔异常」（取决于宠物清单加载快慢的竞态）。此时跳过 apply，保持整窗
   // 可交互（不裁切），等宠物真正渲染出来后由 currentPet 的 watch 触发重新上报。
+  // 注意：macOS 走 NSTimer 动态穿透，不需要 applyPetHitRects，但多调用一次 harmless。
   void setPetHitRects(rects)
   if (hasPetRect) {
     void applyPetHitRects()

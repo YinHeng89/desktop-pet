@@ -92,6 +92,20 @@ export async function emitEvent(event: string, payload: unknown = undefined): Pr
   }
 }
 
+/** 上报可交互矩形（macOS/Windows 统一入口）。
+ *  macOS 走 NSTimer 动态穿透，Windows 走 SetWindowRgn 裁切；Linux 目前为 no-op。 */
+export async function updateInteractiveRects(
+  rects: Array<[number, number, number, number]>,
+): Promise<void> {
+  if (!isTauri) return
+  try {
+    const invoke = await getInvoke()
+    await invoke('update_interactive_rects', { rects })
+  } catch (e) {
+    console.error('[tauri] updateInteractiveRects failed', e)
+  }
+}
+
 /** 上报可交互矩形（macOS 像素穿透用） */
 export async function setNotifyInteractiveRects(
   rects: Array<[number, number, number, number]>,

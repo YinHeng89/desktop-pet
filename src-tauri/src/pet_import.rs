@@ -112,26 +112,32 @@ fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     }
 }
 
-/// 帧尺寸（与 manifest.json 的 frame 一致：192×208，8 列）。
+/// Rust 侧用于 row/count 越界估算的「默认假设」帧尺寸。
+/// 注意：这并非强制标准。项目支持任意帧尺寸的外部包(Codex 生成的高清大帧
+/// 尺寸远大于此、列数也非 8)，前端按 manifest 声明的真实 frame 尺寸自适应取帧。
+/// 这里仅用于保守估算行数、以及 clamp_seq 对每行列数做上限保护。
 const FRAME_H: u32 = 208;
 const FRAME_COLS: u32 = 8;
 
 /// 根据精灵图实际尺寸，修正一个帧段的 row/count，避免越界。
 /// - row 超出实际行数 → 返回 None（该动作不可用，应移除）
+/// - count / fps 为 0 → 用兜底值（0 帧或 0 fps 会导致动画卡死/不播放）
 /// - count 超出该行剩余列数 → 截断到可用列数
 fn clamp_seq(s: FrameSeqJson, rows: u32) -> Option<FrameSeqJson> {
     if s.row >= rows {
         return None;
     }
     // 该行最多 FRAME_COLS 帧，count 不应超过
-    let count = s.count.min(FRAME_COLS);
+    let count = if s.count == 0 { FRAME_COLS } else { s.count.min(FRAME_COLS) };
     if count == 0 {
         return None;
     }
+    // fps 下限保护：0 fps 会让 CSS 动画卡在第一帧，给一个合理默认
+    let fps = if s.fps == 0 { 8 } else { s.fps };
     Some(FrameSeqJson {
         row: s.row,
         count,
-        fps: s.fps,
+        fps,
     })
 }
 
@@ -206,10 +212,23 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
 ///   - row 越界 → 该动作被移除（前端不会播放它，避免画布清空导致宠物消失）
 ///   - count 越界 → 截断到该行可用列数
 fn build_pet_def(raw: &RawPetJson, spritesheet_bytes: &[u8]) -> PetDefJson {
-    // 计算精灵图实际行数（列数固定 FRAME_COLS）
-    let rows = webp_dimensions(spritesheet_bytes)
-        .map(|(_w, h)| h / FRAME_H)
-        .unwrap_or(11); // 解析失败时回退标准 11 行
+    // 计算精灵图实际行数（列数固定 FRAME_COLS）。
+    // 注意:FRAME_H / FRAME_COLS 只是 Rust 侧用于 row 越界估算的「默认假设」,
+    // 项目明确支持非标准外部包(Codex 生成的高清大帧,帧尺寸远大于 192x208、
+    // 列数也非 8)。前端 SpritePet 用 manifest 声明的真实 frame 尺寸 + naturalWidth
+    // 自适应取帧,所以「不符合 192x208/8 列」并非错误,不应告警(否则对正常显示的
+    // 外部宠物产生误导性的「帧可能错位」噪声)。
+    // 仅当 webp 尺寸完全无法解析(非有效 webp)时才告警,那才是真问题。
+    let (rows, parse_warn): (u32, Option<String>) = match webp_dimensions(spritesheet_bytes) {
+        Some((_w, h)) => (h / FRAME_H, None),
+        None => (
+            11,
+            Some("无法解析精灵图尺寸(非有效 webp?),按 11 行回退处理".into()),
+        ),
+    };
+    if let Some(msg) = parse_warn {
+        eprintln!("[pet_import] 警告(宠物 {}): {msg}", raw.id);
+    }
 
     let idle_raw = raw
         .idle

@@ -27,7 +27,8 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 // 可交互矩形(CSS 逻辑像素,相对窗口内容区/视口左上角):(x, y, w, h)
-type Rect = (f64, f64, f64, f64);
+// 复用跨平台共享类型,保证与 macOS 端语义一致。
+use crate::geometry::Rect;
 static HIT_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 // 是否已初始化(前端上报过矩形)。未初始化时保持整窗可交互。
 static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
@@ -37,18 +38,25 @@ const WINDOW_CORNER_RADIUS: i32 = 14; // 与气泡/设置窗圆角一致
 #[cfg(target_os = "windows")]
 const LOGPIXELSX: i32 = 88; // GDI 常量:每逻辑英寸像素数(X 方向),仅兜底路径用
 
-/// 前端调用:更新可交互区域列表(宠物 + 气泡矩形)。
-/// 存为静态,待 apply_pet_hit_rects 时裁切窗口。空数组表示尚未渲染出有效元素,
-/// 此时把 RECTS_INITIALIZED 置回 false,避免「已初始化但矩形为空」导致整窗永久穿透。
-#[tauri::command]
-pub fn set_pet_hit_rects(rects: Vec<(f64, f64, f64, f64)>) {
+/// 内部:存储可交互矩形(供跨平台统一命令 update_interactive_rects 调用)。
+pub(crate) fn store_hit_rects(rects: &[Rect]) {
     let non_empty = !rects.is_empty();
     if let Ok(mut g) = HIT_RECTS.lock() {
-        *g = rects;
+        *g = rects.to_vec();
     }
     if let Ok(mut init) = RECTS_INITIALIZED.lock() {
         *init = non_empty;
     }
+}
+
+/// 前端调用:更新可交互区域列表(宠物 + 气泡矩形)。
+/// 存为静态,待 apply_pet_hit_rects 时裁切窗口。空数组表示尚未渲染出有效元素,
+/// 此时把 RECTS_INITIALIZED 置回 false,避免「已初始化但矩形为空」导致整窗永久穿透。
+///
+/// 向后兼容:旧命令名。后续前端统一走 update_interactive_rects。
+#[tauri::command]
+pub fn set_pet_hit_rects(rects: Vec<Rect>) {
+    store_hit_rects(&rects);
 }
 
 /// 前端显式触发:把当前 hit rects 应用到 main 窗口(SetWindowRgn 即时生效)。
@@ -237,18 +245,22 @@ pub fn apply_hit_rects(hwnd: isize) -> bool {
         return true;
     }
 
+    // 复用跨平台纯函数把 CSS 逻辑矩形按 DPI scale 换算成物理像素矩形,
+    // 保证与 macOS 端坐标换算口径一致(消除两份独立实现)。
+    let physical = crate::geometry::rects_to_logical_physical(&rects, scale);
+
     // 为每个矩形生成带圆角的 HRGN 并合并(RGN_OR = 并集)。
     // HRGN 在 windows-sys 0.52 即 isize;0 表示空。
     let mut combined: isize = 0;
     let mut ok = false;
-    for &(x, y, w, h) in &rects {
+    for &(x, y, w, h) in &physical {
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
-        let l = (x * scale).round() as i32;
-        let t = (y * scale).round() as i32;
-        let r = ((x + w) * scale).round() as i32;
-        let b = ((y + h) * scale).round() as i32;
+        let l = x.round() as i32;
+        let t = y.round() as i32;
+        let r = (x + w).round() as i32;
+        let b = (y + h).round() as i32;
         let radius = (WINDOW_CORNER_RADIUS as f64 * scale).round() as i32;
         // CreateRoundRectRgn 最后两参数是椭圆宽/高(=直径)，非 CSS 半径；
         // 必须 ×2 才能与 border-radius:14px 视觉一致。
@@ -291,4 +303,16 @@ pub fn apply_hit_rects(hwnd: isize) -> bool {
         }
         true
     }
+}
+
+/// 对外入口:main 窗口创建后调用,安装平台穿透。
+/// Windows:SetWindowRgn 区域裁切;macOS:由 macos_pet 模块处理(见 setup_notify_interactive 分支);
+/// Linux:暂未实现不规则窗口穿透(需要 X11 XShape/XFixes 或 Wayland layer-shell),
+/// 此时仅打印一次友好提示,宠物窗口退化为普通置顶透明窗口(无局部穿透)。
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn setup_notify_interactive(_app: &tauri::AppHandle) {
+    eprintln!(
+        "[windows_pet] Linux 暂不支持不规则窗口穿透:宠物窗口将以普通置顶透明窗口显示,\
+         点击宠物区域外也会命中窗口(无穿透)。如需完整支持,请参考 X11 XShape/XFixes 方案。"
+    );
 }

@@ -29,25 +29,31 @@
 use std::sync::Mutex;
 
 // 可交互矩形（CSS 坐标，相对宠物窗口(main)内容区左上角）：(x, y, w, h)
-type Rect = (f64, f64, f64, f64);
+// 复用跨平台共享类型,保证与 Windows 端语义一致。
+use crate::geometry::{point_in_rects, Rect};
 static INTERACTIVE_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 // 前端是否已经上报过矩形。启动初期前端尚未上报时保持窗口可交互，
 // 避免 NSTimer 在矩形为空时把窗口误判为「穿透」。
 static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
+
+/// 内部：存储可交互矩形（供跨平台统一命令 update_interactive_rects 调用）。
+pub(crate) fn store_interactive_rects(rects: &[Rect]) {
+    let non_empty = !rects.is_empty();
+    if let Ok(mut g) = INTERACTIVE_RECTS.lock() {
+        *g = rects.to_vec();
+    }
+    if let Ok(mut init) = RECTS_INITIALIZED.lock() {
+        *init = non_empty;
+    }
+}
 
 /// 前端调用：更新可交互区域列表。传空数组清空（整窗穿透）。
 /// 注意：空矩形说明前端尚未渲染出有效交互元素（如宠物尚未加载），
 /// 此时把 RECTS_INITIALIZED 置回 false，让 NSTimer 保持窗口可交互，
 /// 避免「已初始化但矩形为空」导致鼠标永久穿透。
 #[tauri::command]
-pub fn set_notify_interactive_rects(rects: Vec<(f64, f64, f64, f64)>) {
-    let non_empty = !rects.is_empty();
-    if let Ok(mut g) = INTERACTIVE_RECTS.lock() {
-        *g = rects;
-    }
-    if let Ok(mut init) = RECTS_INITIALIZED.lock() {
-        *init = non_empty;
-    }
+pub fn set_notify_interactive_rects(rects: Vec<Rect>) {
+    store_interactive_rects(&rects);
 }
 
 /// 是否已初始化（前端上报过矩形）。未初始化时保持可交互。
@@ -61,14 +67,13 @@ fn rects_initialized() -> bool {
 }
 
 /// 判断某点（CSS 坐标，左上原点）是否落在可交互区域内。
+/// 复用 geometry::point_in_rects,与 Windows 端命中语义保持一致（含边界）。
 #[allow(dead_code)]
 fn hit_interactive(x: f64, y: f64) -> bool {
     let g = INTERACTIVE_RECTS.lock().ok();
     match g {
         None => false,
-        Some(rects) => rects
-            .iter()
-            .any(|&(rx, ry, rw, rh)| x >= rx && x < rx + rw && y >= ry && y < ry + rh),
+        Some(rects) => point_in_rects(&rects, x, y),
     }
 }
 
@@ -281,21 +286,46 @@ mod macos_impl {
             // ── 1) 核心：非激活窗口。覆盖 canBecomeMainWindow → NO（仅宠物窗口）──
             // 用 class_replaceMethod 覆盖现有类的该方法（而非 object_setClass 换类），
             // 保留 tao 的 focusable ivar 与 sendEvent: 原生拖拽逻辑。
-            let cls: *mut AnyClass = msg_send![window, class];
-            let sel = sel!(canBecomeMainWindow);
-            let types: *const c_char = {
-                let m: *const Method = class_getInstanceMethod(cls as *const AnyClass, sel);
-                if m.is_null() {
-                    b"c@:\0".as_ptr() as *const c_char
-                } else {
-                    method_getTypeEncoding(m)
+            //
+            // 风险：class_replaceMethod 直接 hook tao 创建的 NSWindow 子类(未文档化内部类),
+            // macOS 大版本升级可能改变其类结构,导致 hook 失效或行为异常。因此:
+            //   (a) 整个 hook 包在 catch_unwind 中,任一 objc 调用 panic 都不会拖垮 app;
+            //   (b) hook 后立刻读回 canBecomeMainWindow 验证是否真生效,失败则降级。
+            let hook_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let cls: *mut AnyClass = msg_send![window, class];
+                let sel = sel!(canBecomeMainWindow);
+                let types: *const c_char = {
+                    let m: *const Method = class_getInstanceMethod(cls as *const AnyClass, sel);
+                    if m.is_null() {
+                        b"c@:\0".as_ptr() as *const c_char
+                    } else {
+                        method_getTypeEncoding(m)
+                    }
+                };
+                let imp: Imp = std::mem::transmute::<
+                    unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> Bool,
+                    Imp,
+                >(pet_can_become_main_window);
+                let _ = class_replaceMethod(cls, sel, imp, types);
+            }))
+            .is_ok();
+
+            if !hook_ok {
+                eprintln!(
+                    "[macos_pet] 警告: 覆盖 canBecomeMainWindow 失败(hook panic)。\
+                     降级为「整窗可交互、不拦截激活」,宠物仍可显示但可能抢焦点。"
+                );
+            } else {
+                // 自检:hook 后读回 canBecomeMainWindow,确认返回 NO(非激活)。
+                // 若返回 YES,说明 hook 未真正生效(类结构变化等),降级提示。
+                let ok: Bool = msg_send![window, canBecomeMainWindow];
+                if ok != Bool::NO {
+                    eprintln!(
+                        "[macos_pet] 警告: canBecomeMainWindow 自检返回 YES(hook 未生效)。\
+                         降级为「整窗可交互」,宠物可能抢占其它 App 焦点。"
+                    );
                 }
-            };
-            let imp: Imp = std::mem::transmute::<
-                unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> Bool,
-                Imp,
-            >(pet_can_become_main_window);
-            let _ = class_replaceMethod(cls, sel, imp, types);
+            }
 
             // ── 2) 非激活状态下也能接收鼠标移动事件 ──
             let _: () = msg_send![window, setAcceptsMouseMovedEvents: true];

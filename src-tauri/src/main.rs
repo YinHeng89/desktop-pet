@@ -5,6 +5,8 @@ mod macos_pet;
 mod windows_pet;
 mod pet_import;
 mod notify_server;
+mod geometry;
+mod interactive;
 
 use tauri::{Emitter, Listener, Manager};
 #[cfg(target_os = "macos")]
@@ -65,8 +67,9 @@ fn broadcast_event(app: tauri::AppHandle, event: String, payload: Option<serde_j
 /// 按 scale 计算 main 宠物窗口的逻辑尺寸（宽×高，含 24px 缓冲）。
 /// scale 范围与前端 MIN_SCALE(0.5)~MAX_SCALE(1.3) 对齐，避免 Rust 与前端口径分裂
 /// 导致窗口尺寸和精灵图渲染尺寸不一致（宠物浮在窗口偏左上、右下角留白）。
+/// 统一使用 geometry::clamp_scale,保证与前端及 Windows 端同一份规则。
 fn pet_window_size(scale: f64) -> (f64, f64) {
-    let scale = scale.clamp(0.5, 1.3);
+    let scale = geometry::clamp_scale(scale);
     let pet_w = (192.0 * scale).round();
     let pet_h = (208.0 * scale).round();
     let bubble_h = (156.0 * scale).round();
@@ -87,7 +90,7 @@ fn pet_window_size(scale: f64) -> (f64, f64) {
 #[tauri::command]
 fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
     let Some(w) = app.get_webview_window("main") else { return };
-    let scale = scale.clamp(0.5, 1.3);
+    let scale = geometry::clamp_scale(scale);
 
     let (ww, wh) = pet_window_size(scale);
 
@@ -423,6 +426,7 @@ fn main() {
             macos_pet::set_notify_interactive_rects,
             windows_pet::set_pet_hit_rects,
             windows_pet::apply_pet_hit_rects,
+            interactive::update_interactive_rects,
             windows_pet::hide_pet_window,
             pet_import::import_pet,
             pet_import::list_imported_pets,
