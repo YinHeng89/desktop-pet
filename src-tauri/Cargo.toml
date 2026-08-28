@@ -1,6 +1,6 @@
 [package]
 name = "petbuddy"
-version = "0.1.62"
+version = "0.1.63"
 description = "PetBuddy — 跨平台桌面宠物 + 通用通知接收器"
 authors = ["PetBuddy"]
 edition = "2021"
