@@ -6,7 +6,9 @@ mod windows_pet;
 mod pet_import;
 mod notify_server;
 
-use tauri::{ActivationPolicy, Emitter, Listener, Manager};
+use tauri::{Emitter, Listener, Manager};
+#[cfg(target_os = "macos")]
+use tauri::ActivationPolicy;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::WindowEvent;
