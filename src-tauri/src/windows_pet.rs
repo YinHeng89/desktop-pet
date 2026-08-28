@@ -189,12 +189,12 @@ unsafe extern "system" fn hit_test_subclass(
     lparam: windows_sys::Win32::Foundation::LPARAM,
 ) -> windows_sys::Win32::Foundation::LRESULT {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, HTCLIENT, HTTRANSPARENT, WM_NCHITTEST,
+        CallWindowProcW, HTCLIENT, HTTRANSPARENT, WM_NCHITTEST, WNDPROC,
     };
 
     // 取出原 WndProc(子类化时已存进 SUBCLASSED 表;此刻 GetWindowLongPtrW 返回的是
     // 我们自己的函数指针,不能再用它取原值)。
-    let original: windows_sys::Win32::Foundation::WNDPROC = match SUBCLASSED.lock() {
+    let original: WNDPROC = match SUBCLASSED.lock() {
         Ok(g) => g.get(&hwnd).map(|e| e.original),
         Err(_) => None,
     };
@@ -253,12 +253,12 @@ fn point_in_hit_rects(hwnd: isize, lparam: isize) -> bool {
 /// 子类化条目:记录每个被挂上钩子的窗口的原 WndProc,供转发消息用。
 #[cfg(target_os = "windows")]
 struct SubclassEntry {
-    original: windows_sys::Win32::Foundation::WNDPROC,
+    original: windows_sys::Win32::UI::WindowsAndMessaging::WNDPROC,
 }
 
 #[cfg(target_os = "windows")]
-static SUBCLASSED: Mutex<std::collections::HashMap<isize, SubclassEntry>> =
-    Mutex::new(std::collections::HashMap::new());
+static SUBCLASSED: std::sync::LazyLock<Mutex<std::collections::HashMap<isize, SubclassEntry>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 /// 对指定 HWND 子类化挂 WM_NCHITTEST 回调(幂等)。
 #[cfg(target_os = "windows")]
@@ -287,8 +287,12 @@ fn subclass_window(hwnd: isize) {
     }
 
     // isize → WNDPROC(Option<extern fn>) 转回函数指针,供 CallWindowProcW 使用
-    let original_fn: windows_sys::Win32::Foundation::WNDPROC =
-        unsafe { std::mem::transmute::<isize, windows_sys::Win32::Foundation::WNDPROC>(original) };
+    let original_fn: windows_sys::Win32::UI::WindowsAndMessaging::WNDPROC =
+        unsafe {
+            std::mem::transmute::<isize, windows_sys::Win32::UI::WindowsAndMessaging::WNDPROC>(
+                original,
+            )
+        };
 
     let prev = unsafe {
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, hit_test_subclass as isize)
