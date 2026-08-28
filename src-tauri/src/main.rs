@@ -108,27 +108,14 @@ fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
             ((right as f64 - ww * sf).round()) as i32,
             ((bottom as f64 - wh * sf).round()) as i32,
         ));
-        // 尺寸/位置变更后必须重新应用命中矩形裁切：SetWindowRgn 的 region
-        // 是相对窗口左上角的像素区域，窗口 resize/reposition 后旧 region 不会
-        // 自动跟随——若不重裁，区域外那圈透明窗口（方形轮廓）会露出来，
-        // 尤其在气泡出现、窗口尺寸随 scale 变化的瞬间最明显（Windows 上表现为
-        // "隐约的 Windows 窗口"）。前端已上报的 HIT_RECTS 仍是当前有效值，直接复用。
-        #[cfg(target_os = "windows")]
-        {
-            if let Ok(hwnd) = w.hwnd() {
-                windows_pet::apply_hit_rects(hwnd.0 as isize);
-            }
-        }
+            // WM_NCHITTEST 子类在每次点击时实时读取 HIT_RECTS 计算命中（区域随窗口
+            // 内容走，不存在「旧 region 不跟随 resize」的问题），因此 resize/reposition
+            // 后无需像 SetWindowRgn 那样手动重裁。前端会在 resize 后重新上报 rects，
+            // 子类自动用最新值。
     } else {
         // 读不到旧状态（极端情况）时退化为仅改尺寸，避免窗口卡死
         let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
-        // 同上：仅改尺寸也需重裁，避免露出窗口轮廓
-        #[cfg(target_os = "windows")]
-        {
-            if let Ok(hwnd) = w.hwnd() {
-                windows_pet::apply_hit_rects(hwnd.0 as isize);
-            }
-        }
+        // WM_NCHITTEST 子类实时读取 HIT_RECTS，resize 后无需手动重裁（见上文）。
     }
 }
 
@@ -293,9 +280,10 @@ fn main() {
                 }
             }
 
-            // Windows：安装透明区域鼠标穿透（SetWindowRgn 把窗口裁成可交互矩形）。
-            // 与 macOS 的 NSTimer 动态切换不同，Windows 用静态区域裁切，
-            // 由前端上报 rect 后调用 apply_pet_hit_rects 即时生效。
+            // Windows：安装透明区域鼠标穿透（WM_NCHITTEST 子类实时命中测试穿透）。
+            // 与 macOS 的 NSTimer 动态切换不同，Windows 不再用 SetWindowRgn 静态裁切，
+            // 而是窗口始终为整块透明矩形、命中测试交给 WM_NCHITTEST，消除与 Chromium
+            // 帧提交的竞态；前端上报的 rect 由子类在点击时实时读取。
             #[cfg(target_os = "windows")]
             {
                 if let Some(w) = app.get_webview_window("main") {

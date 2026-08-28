@@ -19,13 +19,14 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # 外部链接：用系统默认程序打开（浏览器）
 open = "5"
-# Windows 透明窗口鼠标穿透（SetWindowRgn 区域裁切）：仅 Windows 编译使用。
+# Windows 透明窗口鼠标穿透（WM_NCHITTEST 子类命中测试，不再用 SetWindowRgn 裁切）：仅 Windows 编译使用。
 # 版本与 tauri v2 内部 windows-sys 对齐（0.52），避免重复拉取不同版本。
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
     "Win32_UI",
+    "Win32_UI_Shell",
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }

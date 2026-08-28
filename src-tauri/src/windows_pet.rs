@@ -1,30 +1,45 @@
 // Windows 专用:桌面宠物(main 窗口)的可交互区域鼠标穿透。
 // 思路与 macOS 的 macos_pet.rs(NSTimer + ignoresMouseEvents)对齐,但 Windows 用
-// SetWindowRgn 把窗口裁成「仅宠物 + 气泡矩形可交互」,区域外点击穿透到下层桌面/窗口。
+// WM_NCHITTEST 子类实现「宠物/气泡可交互、区域外点击穿透到桌面」,而窗口可见形状
+// 完全由 WebView2 的逐像素 alpha 决定(窗口始终是一整块透明矩形,不再用 SetWindowRgn
+// 裁切)。这样渲染完整性(Chromium 负责)与交互穿透(WM_NCHITTEST 负责)彻底解耦,
+// 消除「SetWindowRgn 即时生效 vs Chromium 帧异步提交」的竞态(多实例并发时尤为明显)。
 //
 // 本文件在所有平台都参与编译(不能用 #![cfg(windows)] 包整个文件,否则 tauri 的
 // generate_handler! 在 macOS 上找不到 command 符号)。真正的 Win32 API 调用用
 // #[cfg(target_os = "windows")] 限定在函数内部,非 Windows 平台提供 no-op 实现。
 //
-// 注意 windows-sys 0.52 的类型约定:HWND / HRGN 等都是 isize 的 newtype(无 .is_invalid()
-// 方法),判空用 `== 0`;SetWindowRgn 第三参数 bRedraw 是 BOOL(i32),传 1 而非 true。
+// 注意 windows-sys 0.52 的类型约定:HWND 等句柄是 isize(newtype),判空用 `== 0`。
 //
-// GDI 对象所有权规则:SetWindowRgn 调用**成功**后,region 的所有权转移给系统,
-// 之后不能再对它调用 DeleteObject(会导致 double-free / 未定义行为)。
-// 但如果 SetWindowRgn **失败**(返回 0),region 仍归调用者所有,必须自己 DeleteObject,
-// 否则泄漏 GDI 句柄。下面所有 SetWindowRgn 调用都据此检查返回值。
+// 本文件不再对 main 宠物窗口调用 SetWindowRgn(那正是「region 提前生效 vs Chromium
+// 帧提交」竞态的根因)。命中测试改由 WM_NCHITTEST 子类在点击时实时读取 HIT_RECTS 完成,
+// 窗口可见形状完全交给 WebView2 的逐像素 alpha。仅「设置窗口」仍用 DWM 圆角/阴影
+// (见 setup_window_rounded_corners),与 main 窗口互不干扰。
 //
-// DPI 缩放注意事项:GetDeviceCaps(hdc, LOGPIXELSX) 返回的是系统/主显示器 DPI,
-// 不是"这个窗口当前所在屏幕"的 DPI——如果窗口被拖到跟主屏缩放比例不同的副屏上,
-// 用 GetDeviceCaps 算出来的 scale 会是错的(命中矩形跟实际物理像素对不上)。
-// 改用 GetDpiForWindow(hwnd),它是按窗口取值,会随窗口跨屏移动动态更新
-// (前提是窗口声明了 Per-Monitor V2 DPI 感知,Tauri 默认会声明)。
-// GetDeviceCaps 保留作为 GetDpiForWindow 返回 0 时的兜底路径。
+// DPI 缩放:WM_NCHITTEST 的屏幕坐标需换算回窗口内容区 CSS 逻辑像素才能和 HIT_RECTS
+// 对齐,这里用 GetDpiForWindow(hwnd) 取按窗口取值的 scale(随窗口跨屏移动动态更新,
+// 前提是窗口声明了 Per-Monitor V2 DPI 感知,Tauri 默认会声明);返回 0 时退 GetDeviceCaps。
 
 use std::sync::Mutex;
 
 // Manager 特性提供 app.get_webview_window(...),在所有平台都需要
 use tauri::Manager;
+
+// Windows 专属 API(仅 Windows 编译,避免在其他平台拉入 windows-sys 符号)。
+// 命中测试由 WM_NCHITTEST 子类完成,不再依赖 SetWindowRgn。
+// SetWindowSubclass / DefSubclassProc 来自 comctl32,在 windows-sys 0.52 中位于
+// Win32::UI::Shell 模块(非 Controls),需启用 Win32_UI_Shell 特性。
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnumChildWindows, GetClassNameW, GetClientRect, HTCLIENT, HTTRANSPARENT, WM_NCHITTEST,
+};
+// ScreenToClient 在 windows-sys 0.52 中归在 Win32::Graphics::Gdi 模块(而非 WindowsAndMessaging)。
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Foundation::{BOOL, HWND, LRESULT, LPARAM, POINT, RECT, WPARAM};
 
 // 可交互矩形(CSS 逻辑像素,相对窗口内容区/视口左上角):(x, y, w, h)
 // 复用跨平台共享类型,保证与 macOS 端语义一致。
@@ -33,8 +48,6 @@ static HIT_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 // 是否已初始化(前端上报过矩形)。未初始化时保持整窗可交互。
 static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
 
-#[cfg(target_os = "windows")]
-const WINDOW_CORNER_RADIUS: i32 = 14; // 与气泡/设置窗圆角一致
 #[cfg(target_os = "windows")]
 const LOGPIXELSX: i32 = 88; // GDI 常量:每逻辑英寸像素数(X 方向),仅兜底路径用
 
@@ -59,56 +72,24 @@ pub fn set_pet_hit_rects(rects: Vec<Rect>) {
     store_hit_rects(&rects);
 }
 
-/// 前端显式触发:把当前 hit rects 应用到 main 窗口(SetWindowRgn 即时生效)。
-/// 非 Windows 平台为 no-op(macOS 走 macos_pet 的 NSTimer 方案)。
+/// 前端显式触发:在当前架构下为 no-op。
+/// 命中测试已由 WM_NCHITTEST 子类在点击时实时读取 HIT_RECTS 完成,
+/// 不再需要 SetWindowRgn 这种「提前把区域一次性贴到窗口」的时机敏感操作
+/// (这正是多实例竞态的根因)。保留此 command 仅为前端兼容,无需再调用。
 #[tauri::command]
 pub fn apply_pet_hit_rects(app: tauri::AppHandle) {
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(w) = app.get_webview_window("main") {
-            if let Ok(hwnd) = w.hwnd() {
-                // tauri 的 HWND 是 windows_sys::Win32::Foundation::HWND(isize newtype)
-                apply_hit_rects(hwnd.0 as isize);
-            }
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = app;
-    }
+    let _ = app;
 }
 
 /// 隐藏 main 宠物窗口。
 ///
-/// 修复要点(原代码顺序反了):原来是「先 SetWindowRgn(0) 清 region → 再 hide」,
-/// 但 SetWindowRgn 会同步触发 DWM 立即按"整窗矩形、无裁切"重绘一帧,这一帧发生在
-/// hide() 真正让窗口消失之前,于是用户会看到一闪而过的窗口边框/阴影。
-///
-/// 正确顺序:先 hide()(窗口已不可见,不会有画面暴露给用户),再清 region
-/// (清掉裁切,避免下次 show 时残留旧的小 region 导致"缩略图"问题)。
-/// 且清 region 这一步用 bRedraw=0(不重绘),因为窗口已经隐藏,不需要立即生效的重绘。
+/// 新架构下 main 窗口不再使用 SetWindowRgn 裁切(可见形状由 WebView2 逐像素 alpha
+/// 负责,命中测试由 WM_NCHITTEST 子类负责),因此隐藏只需直接 hide(),无需先清 region。
+/// 直接 hide 即可,不会有旧代码担心的"残留小 region 导致缩略图"问题。
 #[tauri::command]
 pub fn hide_pet_window(app: tauri::AppHandle) {
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(w) = app.get_webview_window("main") {
-            // 1. 先隐藏:窗口不可见后,任何后续重绘都不会呈现给用户
-            let _ = w.hide();
-
-            // 2. 再清 region(HRGN=0 表示清除裁切),bRedraw=0 不强制重绘
-            if let Ok(hwnd) = w.hwnd() {
-                use windows_sys::Win32::Graphics::Gdi::SetWindowRgn;
-                unsafe {
-                    SetWindowRgn(hwnd.0 as isize, 0, 0);
-                }
-            }
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.hide();
-        }
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
     }
 }
 
@@ -118,8 +99,11 @@ pub fn hide_pet_window(app: tauri::AppHandle) {
 pub fn setup_notify_interactive(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         if let Ok(hwnd) = w.hwnd() {
-            // 初始先整窗可交互(未初始化前不裁切,避免误穿透)
-            apply_hit_rects(hwnd.0 as isize);
+            // 安装 WM_NCHITTEST 子类:窗口保持整块透明矩形(可见形状由 WebView2 的
+            // 逐像素 alpha 决定,不再用 SetWindowRgn 裁切),命中测试改由子类在点击时
+            // 实时读取 HIT_RECTS 完成——彻底消除「region 提前生效 vs Chromium 帧提交」
+            // 的竞态,多实例并发时各窗口也独立稳定。
+            install_hit_test_subclass(hwnd.0 as isize);
         }
     }
 }
@@ -137,8 +121,9 @@ pub fn setup_notify_interactive(app: &tauri::AppHandle) {
 /// 这样圆角与 CSS `--radius-window`(已改为 8px)在视觉上一致，且投影由系统绘制、不被裁。
 ///
 /// 注意：DWM 档位只能选系统预设(大圆角档实测约 8px，无法精确到任意像素)，这正是
-/// 本项目把设置窗圆角定为 8px 而非 14px 的原因。宠物窗口因需要区域级穿透，仍用
-/// `SetWindowRgn`(`apply_hit_rects`)，与本函数互不影响。
+/// 本项目把设置窗圆角定为 8px 而非 14px 的原因。宠物主窗口的命中测试穿透现在由
+/// WM_NCHITTEST 子类负责(见 install_hit_test_subclass，不再用 SetWindowRgn 裁切)，
+/// 与本函数互不影响。
 #[cfg(target_os = "windows")]
 pub fn setup_window_rounded_corners(hwnd: isize) {
     use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
@@ -217,96 +202,138 @@ fn window_dpi_scale(hwnd: isize) -> f64 {
     }
 }
 
+/// 在 main 窗口(及其 WebView2 子窗口)上安装 WM_NCHITTEST 子类,实现「宠物/气泡可交互,
+/// 区域外点击穿透到桌面」,且**不**使用 SetWindowRgn 裁切可见形状。
+///
+/// 为什么必须同时子类化 WebView2 子窗口:
+/// WebView2 在 Tauri 窗口内创建一个子 HWND 承载 Chromium。鼠标位于子窗口上方时,
+/// WM_NCHITTEST 会先发给子窗口,子窗口默认返回 HTCLIENT,导致「区域外点击」被吞进
+/// WebView2 而非穿透到桌面。因此除父类(主窗口)外,还要找到 WebView2 子窗口一并子类化:
+/// 子类对区域外返回 HTTRANSPARENT,该命中结果会向上冒泡到父类,父类同样返回
+/// HTTRANSPARENT,最终 OS 把点击交给我们下方的窗口(桌面/其他程序)。
 #[cfg(target_os = "windows")]
-pub fn apply_hit_rects(hwnd: isize) -> bool {
-    use windows_sys::Win32::Graphics::Gdi::{
-        CombineRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
-    };
-
-    // hwnd 为 0 视为无效
-    if hwnd == 0 {
-        return false;
+pub fn install_hit_test_subclass(main_hwnd: isize) {
+    if main_hwnd == 0 {
+        return;
     }
+    unsafe {
+        // 1) 主窗口自身
+        let _ = SetWindowSubclass(main_hwnd, Some(hit_test_subclass), 1, main_hwnd as usize);
 
-    // 按窗口当前所在屏幕取 DPI scale(而不是固定用主屏/系统 DPI)
-    let scale = window_dpi_scale(hwnd);
-
-    let rects = match HIT_RECTS.lock() {
-        Ok(g) => g.clone(),
-        Err(_) => Vec::new(),
-    };
-    let initialized = matches!(RECTS_INITIALIZED.lock(), Ok(g) if *g);
-
-    // 未初始化或空矩形 → 整窗可交互(传 0 region 清除裁切)
-    if !initialized || rects.is_empty() {
-        unsafe {
-            SetWindowRgn(hwnd, 0, 1);
-        }
-        return true;
-    }
-
-    // 复用跨平台纯函数把 CSS 逻辑矩形按 DPI scale 换算成物理像素矩形,
-    // 保证与 macOS 端坐标换算口径一致(消除两份独立实现)。
-    let physical = crate::geometry::rects_to_logical_physical(&rects, scale);
-
-    // 为每个矩形生成带圆角的 HRGN 并合并(RGN_OR = 并集)。
-    // HRGN 在 windows-sys 0.52 即 isize;0 表示空。
-    let mut combined: isize = 0;
-    let mut ok = false;
-    for &(x, y, w, h) in &physical {
-        if w <= 0.0 || h <= 0.0 {
-            continue;
-        }
-        let l = x.round() as i32;
-        let t = y.round() as i32;
-        let r = (x + w).round() as i32;
-        let b = (y + h).round() as i32;
-        let radius = (WINDOW_CORNER_RADIUS as f64 * scale).round() as i32;
-        // CreateRoundRectRgn 最后两参数是椭圆宽/高(=直径)，非 CSS 半径；
-        // 必须 ×2 才能与 border-radius:14px 视觉一致。
-        let diameter = radius.saturating_mul(2);
-        let rgn = unsafe { CreateRoundRectRgn(l, t, r, b, diameter, diameter) };
-        if rgn == 0 {
-            continue;
-        }
-        if combined == 0 {
-            combined = rgn;
-            ok = true;
+        // 2) 找到 WebView2 子窗口并同样子类化
+        let mut collector = ChildCollector {
+            matches: Vec::new(),
+            all: Vec::new(),
+        };
+        EnumChildWindows(
+            main_hwnd,
+            Some(collect_child),
+            &mut collector as *mut _ as LPARAM,
+        );
+        let child = if !collector.matches.is_empty() {
+            collector.matches[0]
+        } else if collector.all.len() == 1 {
+            collector.all[0]
         } else {
-            unsafe {
-                CombineRgn(combined, combined, rgn, RGN_OR);
-                // 子区域合并后不再需要,销毁以释放 GDI 对象
-                DeleteObject(rgn);
+            // 取客户端面积最大的子窗口(WebView2 通常占满主窗口)
+            let mut best: HWND = 0;
+            let mut best_area: i64 = 0;
+            for &h in &collector.all {
+                let mut r = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                if GetClientRect(h, &mut r) != 0 {
+                    let area = (r.right - r.left) as i64 * (r.bottom - r.top) as i64;
+                    if area > best_area {
+                        best_area = area;
+                        best = h;
+                    }
+                }
             }
+            best
+        };
+        if child != 0 {
+            let _ = SetWindowSubclass(child, Some(hit_test_subclass), 1, main_hwnd as usize);
         }
-    }
-
-    if ok && combined != 0 {
-        // 检查 SetWindowRgn 返回值。
-        // 成功(非 0):region 所有权转移给系统,不能再 DeleteObject。
-        // 失败(0):region 仍归我们所有,必须自己 DeleteObject,否则泄漏 GDI 句柄。
-        let result = unsafe { SetWindowRgn(hwnd, combined, 1) };
-        if result == 0 {
-            unsafe {
-                DeleteObject(combined);
-            }
-            // 应用失败,回退为整窗可交互,避免用户完全无法交互
-            unsafe {
-                SetWindowRgn(hwnd, 0, 1);
-            }
-        }
-        true
-    } else {
-        // 没有有效矩形:整窗可交互
-        unsafe {
-            SetWindowRgn(hwnd, 0, 1);
-        }
-        true
     }
 }
 
+/// WM_NCHITTEST 子类回调:区域外返回 HTTRANSPARENT(穿透),区域内返回 HTCLIENT(可交互)。
+/// ref_data 传入主窗口 HWND(usize),用于把屏幕坐标换算成窗口内容区 CSS 逻辑坐标。
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn hit_test_subclass(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    ref_data: usize,
+) -> LRESULT {
+    if msg == WM_NCHITTEST {
+        let main_hwnd = ref_data as isize;
+        // lparam = 屏幕坐标(低 16 位 x,高 16 位 y)
+        let sx = (lparam & 0xffff) as i16 as i32;
+        let sy = ((lparam >> 16) & 0xffff) as i16 as i32;
+        let mut pt = POINT { x: sx, y: sy };
+        if main_hwnd != 0 && ScreenToClient(main_hwnd, &mut pt) != 0 {
+            let scale = window_dpi_scale(main_hwnd);
+            if scale > 0.0 {
+                let css_x = pt.x as f64 / scale;
+                let css_y = pt.y as f64 / scale;
+                let (rects, initialized) = {
+                    let r = HIT_RECTS
+                        .lock()
+                        .map(|g| g.clone())
+                        .unwrap_or_default();
+                    let i = RECTS_INITIALIZED.lock().map(|g| *g).unwrap_or(false);
+                    (r, i)
+                };
+                // 未初始化或空矩形:整窗可交互(等效旧逻辑 region=0),避免完全无法交互
+                if !initialized || rects.is_empty() {
+                    return HTCLIENT as LRESULT;
+                }
+                if crate::geometry::point_in_rects(&rects, css_x, css_y) {
+                    return HTCLIENT as LRESULT;
+                }
+                return HTTRANSPARENT as LRESULT;
+            }
+        }
+        // 坐标转换失败兜底:整窗可交互
+        return HTCLIENT as LRESULT;
+    }
+    DefSubclassProc(hwnd, msg, wparam, lparam)
+}
+
+/// EnumChildWindows 回调:收集所有子窗口,并标记类名匹配 WebView2/Chromium 的。
+#[cfg(target_os = "windows")]
+struct ChildCollector {
+    matches: Vec<HWND>,
+    all: Vec<HWND>,
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn collect_child(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let col = &mut *(lparam as *mut ChildCollector);
+    let mut buf = [0u16; 256];
+    let len = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+    let class = if len > 0 {
+        String::from_utf16_lossy(&buf[..len as usize])
+    } else {
+        String::new()
+    };
+    if class.contains("WebView2") || class.contains("Chrome_WidgetWin") {
+        col.matches.push(hwnd);
+    }
+    col.all.push(hwnd);
+    1
+}
+
 /// 对外入口:main 窗口创建后调用,安装平台穿透。
-/// Windows:SetWindowRgn 区域裁切;macOS:由 macos_pet 模块处理(见 setup_notify_interactive 分支);
+/// Windows:WM_NCHITTEST 子类做命中测试穿透(见 install_hit_test_subclass);
+/// macOS:由 macos_pet 模块处理(见 setup_notify_interactive 分支);
 /// Linux:暂未实现不规则窗口穿透(需要 X11 XShape/XFixes 或 Wayland layer-shell),
 /// 此时仅打印一次友好提示,宠物窗口退化为普通置顶透明窗口(无局部穿透)。
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]

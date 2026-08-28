@@ -43,7 +43,8 @@ pub fn point_in_rects(rects: &[Rect], px: f64, py: f64) -> bool {
 /// Windows 端 SetWindowRgn 需要物理像素;macOS 的 NSTimer 方案直接用 CSS 坐标,
 /// 不需要此换算(它在 ObjC 层用 frame 处理)。
 ///
-/// 此处只做 `rect * scale`,DPI 由调用方决定是否额外乘(见 windows_pet::apply_hit_rects)。
+/// 此处只做 `rect * scale`,DPI 由调用方决定是否额外乘(见 windows_pet::window_dpi_scale
+/// 与 WM_NCHITTEST 子类中把屏幕坐标换算回 CSS 逻辑像素的逻辑)。
 /// 注意:此函数在 macOS 编译目标下无调用方(仅 Windows cfg 内使用),
 /// 故加 #[allow(dead_code)] 抑制跨平台编译的未使用警告。
 #[allow(dead_code)]
