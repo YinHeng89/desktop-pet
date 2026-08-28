@@ -159,7 +159,7 @@ pub fn setup_window_rounded_corners(hwnd: isize) {
 
     unsafe {
         let corner = DWMWCP_ROUNDLARGE;
-        // 大圆角档：与 CSS --radius-window:8px 视觉对齐
+        // 大圆角档：与 CSS --radius-window:6px 视觉对齐
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
