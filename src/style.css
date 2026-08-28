@@ -21,7 +21,7 @@
   --radius-md: 16px;
   --radius-lg: 22px;
   --radius-pill: 999px;
-  /* 设置窗口级圆角（PetSettings 窗口与弹窗蒙版用此值，8px 与 DWM ROUNDLARGE 系统档对齐）。
+  /* 设置窗口级圆角（PetSettings 窗口与弹窗蒙版用此值，6px 与 DWM ROUNDLARGE 系统档对齐）。
      气泡圆角保持 14px，不引用此变量。 */
   --radius-window: 6px;
 
