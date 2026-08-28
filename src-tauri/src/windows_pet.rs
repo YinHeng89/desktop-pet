@@ -1,44 +1,59 @@
-// Windows 专用:桌面宠物(main 窗口)的可交互区域鼠标穿透。
-// 思路与 macOS 的 macos_pet.rs(NSTimer + ignoresMouseEvents)对齐,但 Windows 用
-// SetWindowRgn 把窗口裁成「仅宠物 + 气泡矩形可交互」,区域外点击穿透到下层桌面/窗口。
+// Windows 专用：桌面宠物(main 窗口)的可交互区域鼠标穿透。
+//
+// 方案：后端 Rust 线程轮询 + `WebviewWindow::set_ignore_cursor_events` 动态切换整窗穿透。
+// 与 macOS 端「NSTimer 轮询 + setIgnoresMouseEvents」完全对等。
+//
+// 为什么不用 SetWindowRgn：
+//   SetWindowRgn 会同时改变窗口「可见形状」与「命中区域」，而 WebView2 的内容由
+//   msedgewebview2.exe 在独立渲染进程里异步合成并提交给 DWM。region 生效那一刻与
+//   Chromium 那一帧的提交没有同步点，于是 DWM 会按「新 region × 旧帧」合成，表现为
+//   多实例时随机被切掉下半身。这是两个系统之间缺少同步机制的架构性竞态，调矩形/DPI/
+//   加日志都无法根治。
+//
+// 为什么不直接对 WebView2 子窗口做 WM_NCHITTEST 子类化：
+//   WebView2 真正接收输入的 HWND（Chrome_WidgetWin_*）由别的进程创建，跨进程子类化
+//   要么失败要么无效，且返回 HTTRANSPARENT 会触发跨线程消息弹跳导致 CPU 打满。
+//
+// 因此这里采用「整窗级穿透 + 后端轮询命中判断」：鼠标落在宠物/气泡矩形内 → 关闭穿透
+//   （可交互），否则开启穿透（点击落到下层桌面/窗口）。Tauri 的 set_ignore_cursor_events
+//   内部已经正确帮你叠加 WS_EX_TRANSPARENT / WS_EX_LAYERED，比裸调 SetWindowLongPtr 可靠。
 //
 // 本文件在所有平台都参与编译(不能用 #![cfg(windows)] 包整个文件,否则 tauri 的
 // generate_handler! 在 macOS 上找不到 command 符号)。真正的 Win32 API 调用用
 // #[cfg(target_os = "windows")] 限定在函数内部,非 Windows 平台提供 no-op 实现。
-//
-// 注意 windows-sys 0.52 的类型约定:HWND / HRGN 等都是 isize 的 newtype(无 .is_invalid()
-// 方法),判空用 `== 0`;SetWindowRgn 第三参数 bRedraw 是 BOOL(i32),传 1 而非 true。
-//
-// GDI 对象所有权规则:SetWindowRgn 调用**成功**后,region 的所有权转移给系统,
-// 之后不能再对它调用 DeleteObject(会导致 double-free / 未定义行为)。
-// 但如果 SetWindowRgn **失败**(返回 0),region 仍归调用者所有,必须自己 DeleteObject,
-// 否则泄漏 GDI 句柄。下面所有 SetWindowRgn 调用都据此检查返回值。
-//
-// DPI 缩放注意事项:GetDeviceCaps(hdc, LOGPIXELSX) 返回的是系统/主显示器 DPI,
-// 不是"这个窗口当前所在屏幕"的 DPI——如果窗口被拖到跟主屏缩放比例不同的副屏上,
-// 用 GetDeviceCaps 算出来的 scale 会是错的(命中矩形跟实际物理像素对不上)。
-// 改用 GetDpiForWindow(hwnd),它是按窗口取值,会随窗口跨屏移动动态更新
-// (前提是窗口声明了 Per-Monitor V2 DPI 感知,Tauri 默认会声明)。
-// GetDeviceCaps 保留作为 GetDpiForWindow 返回 0 时的兜底路径。
 
-use std::sync::Mutex;
-
-// Manager 特性提供 app.get_webview_window(...),在所有平台都需要
 use tauri::Manager;
 
-// 可交互矩形(CSS 逻辑像素,相对窗口内容区/视口左上角):(x, y, w, h)
-// 复用跨平台共享类型,保证与 macOS 端语义一致。
+// 以下 import 仅 Windows 的穿透轮询使用,故统一标 #[cfg(target_os = "windows")],
+// 避免 macOS 编译报 unused/unused_imports。
+#[cfg(target_os = "windows")]
+use std::sync::Mutex;
+#[cfg(target_os = "windows")]
+use std::thread;
+#[cfg(target_os = "windows")]
+use std::time::Duration;
+#[cfg(target_os = "windows")]
 use crate::geometry::Rect;
+#[cfg(target_os = "windows")]
+use crate::geometry::point_in_rects;
+// 以下静态/常量/函数只在 Windows 的穿透轮询中使用;非 Windows 平台无调用方,
+// 故统一标 #[cfg(target_os = "windows")],避免 macOS 编译报 dead_code。
+#[cfg(target_os = "windows")]
 static HIT_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
-// 是否已初始化(前端上报过矩形)。未初始化时保持整窗可交互。
+// 是否已初始化(前端上报过矩形)。未初始化时保持整窗可交互(不穿透)。
+#[cfg(target_os = "windows")]
 static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
+// 上次已应用的「穿透」状态，避免每个 tick 都调用 set_ignore_cursor_events（减少开销）。
+#[cfg(target_os = "windows")]
+static LAST_IGNORE: Mutex<bool> = Mutex::new(false);
 
+/// 轮询间隔。约 20ms（50fps），与 macOS 的 16ms 同量级。
+/// 太小会增加 CPU；太大则鼠标从透明区划到宠物上时会有可感知的「穿透未恢复」延迟。
 #[cfg(target_os = "windows")]
-const WINDOW_CORNER_RADIUS: i32 = 14; // 与气泡/设置窗圆角一致
-#[cfg(target_os = "windows")]
-const LOGPIXELSX: i32 = 88; // GDI 常量:每逻辑英寸像素数(X 方向),仅兜底路径用
+const POLL_INTERVAL_MS: u64 = 20;
 
 /// 内部:存储可交互矩形(供跨平台统一命令 update_interactive_rects 调用)。
+#[cfg(target_os = "windows")]
 pub(crate) fn store_hit_rects(rects: &[Rect]) {
     let non_empty = !rects.is_empty();
     if let Ok(mut g) = HIT_RECTS.lock() {
@@ -49,103 +64,32 @@ pub(crate) fn store_hit_rects(rects: &[Rect]) {
     }
 }
 
-/// 前端调用:更新可交互区域列表(宠物 + 气泡矩形)。
-/// 存为静态,待 apply_pet_hit_rects 时裁切窗口。空数组表示尚未渲染出有效元素,
-/// 此时把 RECTS_INITIALIZED 置回 false,避免「已初始化但矩形为空」导致整窗永久穿透。
+/// 隐藏 main 宠物窗口：直接隐藏即可。
 ///
-/// 向后兼容:旧命令名。后续前端统一走 update_interactive_rects。
-#[tauri::command]
-pub fn set_pet_hit_rects(rects: Vec<Rect>) {
-    store_hit_rects(&rects);
-}
-
-/// 前端显式触发:把当前 hit rects 应用到 main 窗口(SetWindowRgn 即时生效)。
-/// 非 Windows 平台为 no-op(macOS 走 macos_pet 的 NSTimer 方案)。
-#[tauri::command]
-pub fn apply_pet_hit_rects(app: tauri::AppHandle) {
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(w) = app.get_webview_window("main") {
-            if let Ok(hwnd) = w.hwnd() {
-                // tauri 的 HWND 是 windows_sys::Win32::Foundation::HWND(isize newtype)
-                apply_hit_rects(hwnd.0 as isize);
-            }
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = app;
-    }
-}
-
-/// 隐藏 main 宠物窗口。
-///
-/// 修复要点(原代码顺序反了):原来是「先 SetWindowRgn(0) 清 region → 再 hide」,
-/// 但 SetWindowRgn 会同步触发 DWM 立即按"整窗矩形、无裁切"重绘一帧,这一帧发生在
-/// hide() 真正让窗口消失之前,于是用户会看到一闪而过的窗口边框/阴影。
-///
-/// 正确顺序:先 hide()(窗口已不可见,不会有画面暴露给用户),再清 region
-/// (清掉裁切,避免下次 show 时残留旧的小 region 导致"缩略图"问题)。
-/// 且清 region 这一步用 bRedraw=0(不重绘),因为窗口已经隐藏,不需要立即生效的重绘。
+/// 之前用 SetWindowRgn(0) 清裁切是为了「下次 show 不残留旧 region」,但本方案不再使用
+/// region,窗口可见形状完全由 WebView2 的透明背景决定,所以隐藏只需要 hide()。
 #[tauri::command]
 pub fn hide_pet_window(app: tauri::AppHandle) {
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(w) = app.get_webview_window("main") {
-            // 1. 先隐藏:窗口不可见后,任何后续重绘都不会呈现给用户
-            let _ = w.hide();
-
-            // 2. 再清 region(HRGN=0 表示清除裁切),bRedraw=0 不强制重绘
-            if let Ok(hwnd) = w.hwnd() {
-                use windows_sys::Win32::Graphics::Gdi::SetWindowRgn;
-                unsafe {
-                    SetWindowRgn(hwnd.0 as isize, 0, 0);
-                }
-            }
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.hide();
-        }
-    }
-}
-
-/// 对外入口:main 窗口创建后调用,安装 Windows 穿透。
-/// 非 Windows 平台为 no-op(macOS 由 macos_pet::setup_notify_interactive 处理)。
-#[cfg(target_os = "windows")]
-pub fn setup_notify_interactive(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
-        if let Ok(hwnd) = w.hwnd() {
-            // 初始先整窗可交互(未初始化前不裁切,避免误穿透)
-            apply_hit_rects(hwnd.0 as isize);
-        }
+        let _ = w.hide();
     }
 }
 
 /// 给**设置窗口**设置系统级圆角 + 系统级阴影(Windows, DWM 方案)。
 ///
 /// 设置窗口是普通无边框卡片窗口，需要「圆角 + 悬浮投影」的精致外观。
-/// 若用 `SetWindowRgn` 自绘圆角，会裁掉整个窗口 shape 之外的像素 —— 包括系统投影，
-/// 导致投影消失(之前踩过的坑)。因此设置窗口改用 DWM 方案：
-///
-/// 1. `DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUNDLARGE`(系统最大圆角档，~8px)，
-///    由 DWM 在系统层裁切窗口四角，且**不裁掉投影**(投影由 DWM 合成在 shape 之外)。
-/// 2. `DWMWA_SHADOW = 2`(开启系统默认阴影)，让无边框窗口获得悬浮投影。
-///
-/// 这样圆角与 CSS `--radius-window`(已改为 8px)在视觉上一致，且投影由系统绘制、不被裁。
-///
-/// 注意：DWM 档位只能选系统预设(大圆角档实测约 8px，无法精确到任意像素)，这正是
-/// 本项目把设置窗圆角定为 8px 而非 14px 的原因。宠物窗口因需要区域级穿透，仍用
-/// `SetWindowRgn`(`apply_hit_rects`)，与本函数互不影响。
+/// 宠物窗口因需要整窗穿透(用自己的方案),与设置窗口互不干扰。
 #[cfg(target_os = "windows")]
-pub fn setup_window_rounded_corners(hwnd: isize) {
+pub fn setup_window_rounded_corners(hwnd_raw: isize) {
     use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+    use windows_sys::Win32::Foundation::HWND;
 
-    if hwnd == 0 {
+    if hwnd_raw == 0 {
         return;
     }
+
+    // Win32 API 第一参数是 HWND newtype，这里统一转一下（入口是 isize）。
+    let hwnd = HWND(hwnd_raw);
 
     // DWMWINDOWATTRIBUTE 枚举值(硬编码避免不同 windows-sys 版本命名差异)：
     //   DWMWA_WINDOW_CORNER_PREFERENCE = 33
@@ -159,7 +103,6 @@ pub fn setup_window_rounded_corners(hwnd: isize) {
 
     unsafe {
         let corner = DWMWCP_ROUNDLARGE;
-        // 大圆角档：与 CSS --radius-window:6px 视觉对齐
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -168,7 +111,6 @@ pub fn setup_window_rounded_corners(hwnd: isize) {
         );
 
         let shadow = DWM_SHADOW_ENABLE;
-        // 开启系统阴影(无边框窗口默认无投影，需显式开启)
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_SHADOW,
@@ -183,24 +125,26 @@ pub fn setup_window_rounded_corners(hwnd: isize) {
 #[allow(dead_code)]
 pub fn setup_window_rounded_corners(_hwnd: isize) {}
 
-/// 计算窗口当前所在屏幕的 DPI 缩放系数。
+/// 计算窗口当前所在屏幕的 DPI 缩放系数。用于将前端上报的 CSS 逻辑矩形
+/// 换算到物理像素,跟全局鼠标坐标(GetCursorPos,物理像素)做命中判断。
 ///
 /// 优先用 GetDpiForWindow(hwnd)——按窗口取值,窗口跨屏移动到不同缩放比例的
 /// 显示器上时会动态更新,这是 Windows 10 1607+ 推荐的正确做法。
-/// 仅当它返回 0(极少见,比如窗口句柄尚未完全与桌面窗口管理器关联)时,
-/// 才退回旧的 GetDeviceCaps 方式兜底——注意这个兜底值取的是主屏/系统 DPI,
-/// 窗口在副屏上时可能不准,但总比直接崩溃或用一个硬编码的 1.0 更合理。
+/// 仅当它返回 0(极少见)时,才退回 GetDeviceCaps 兜底。
 #[cfg(target_os = "windows")]
-fn window_dpi_scale(hwnd: isize) -> f64 {
+fn window_dpi_scale(hwnd_raw: isize) -> f64 {
     use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+
+    // Win32 API 第一参数是 HWND newtype，这里统一转一下（入口是 isize）。
+    let hwnd = windows_sys::Win32::Foundation::HWND(hwnd_raw);
 
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi > 0 {
         return dpi as f64 / 96.0;
     }
 
-    // 兜底路径
     use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC};
+    const LOGPIXELSX: i32 = 88;
     unsafe {
         let hdc = GetDC(hwnd);
         if hdc == 0 {
@@ -217,102 +161,94 @@ fn window_dpi_scale(hwnd: isize) -> f64 {
     }
 }
 
+/// 读取一次当前鼠标是否在可交互区域内（CSS 坐标，左上原点）。
+///
+/// 这是轮询的核心：拿全局鼠标位置，换算到窗口内容区坐标系，跟上报的矩形比较。
 #[cfg(target_os = "windows")]
-pub fn apply_hit_rects(hwnd: isize) -> bool {
-    use windows_sys::Win32::Graphics::Gdi::{
-        CombineRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
-    };
+fn compute_should_ignore(w: &tauri::WebviewWindow) -> Option<bool> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    use windows_sys::Win32::Foundation::POINT;
 
-    // hwnd 为 0 视为无效
-    if hwnd == 0 {
-        return false;
+    // 未初始化 → 保持可交互(不穿透),避免启动初期误穿透。
+    let initialized = matches!(RECTS_INITIALIZED.lock(), Ok(g) if *g);
+    if !initialized {
+        return Some(false);
     }
-
-    // 按窗口当前所在屏幕取 DPI scale(而不是固定用主屏/系统 DPI)
-    let scale = window_dpi_scale(hwnd);
 
     let rects = match HIT_RECTS.lock() {
         Ok(g) => g.clone(),
-        Err(_) => Vec::new(),
+        Err(_) => return None,
     };
-    let initialized = matches!(RECTS_INITIALIZED.lock(), Ok(g) if *g);
-
-    // 未初始化或空矩形 → 整窗可交互(传 0 region 清除裁切)
-    if !initialized || rects.is_empty() {
-        unsafe {
-            SetWindowRgn(hwnd, 0, 1);
-        }
-        return true;
+    if rects.is_empty() {
+        return Some(false);
     }
 
-    // 复用跨平台纯函数把 CSS 逻辑矩形按 DPI scale 换算成物理像素矩形,
-    // 保证与 macOS 端坐标换算口径一致(消除两份独立实现)。
-    let physical = crate::geometry::rects_to_logical_physical(&rects, scale);
+    // 用窗口自身的 hwnd 取 DPI,保证「矩形换算」与「窗口实际所在屏」一致。
+    let hwnd = match w.hwnd() {
+        Ok(h) => h.0 as isize,
+        Err(_) => return None,
+    };
+    let scale = window_dpi_scale(hwnd);
 
-    // 为每个矩形生成带圆角的 HRGN 并合并(RGN_OR = 并集)。
-    // HRGN 在 windows-sys 0.52 即 isize;0 表示空。
-    let mut combined: isize = 0;
-    let mut ok = false;
-    for &(x, y, w, h) in &physical {
-        if w <= 0.0 || h <= 0.0 {
-            continue;
-        }
-        let l = x.round() as i32;
-        let t = y.round() as i32;
-        let r = (x + w).round() as i32;
-        let b = (y + h).round() as i32;
-        let radius = (WINDOW_CORNER_RADIUS as f64 * scale).round() as i32;
-        // CreateRoundRectRgn 最后两参数是椭圆宽/高(=直径)，非 CSS 半径；
-        // 必须 ×2 才能与 border-radius:14px 视觉一致。
-        let diameter = radius.saturating_mul(2);
-        let rgn = unsafe { CreateRoundRectRgn(l, t, r, b, diameter, diameter) };
-        if rgn == 0 {
-            continue;
-        }
-        if combined == 0 {
-            combined = rgn;
-            ok = true;
-        } else {
-            unsafe {
-                CombineRgn(combined, combined, rgn, RGN_OR);
-                // 子区域合并后不再需要,销毁以释放 GDI 对象
-                DeleteObject(rgn);
-            }
-        }
+    // 全局鼠标位置(物理像素,屏幕坐标)。
+    let mut pt = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut pt) } == 0 {
+        // 拿不到鼠标位置,保守保持当前状态。
+        return None;
     }
 
-    if ok && combined != 0 {
-        // 检查 SetWindowRgn 返回值。
-        // 成功(非 0):region 所有权转移给系统,不能再 DeleteObject。
-        // 失败(0):region 仍归我们所有,必须自己 DeleteObject,否则泄漏 GDI 句柄。
-        let result = unsafe { SetWindowRgn(hwnd, combined, 1) };
-        if result == 0 {
-            unsafe {
-                DeleteObject(combined);
-            }
-            // 应用失败,回退为整窗可交互,避免用户完全无法交互
-            unsafe {
-                SetWindowRgn(hwnd, 0, 1);
-            }
-        }
-        true
-    } else {
-        // 没有有效矩形:整窗可交互
-        unsafe {
-            SetWindowRgn(hwnd, 0, 1);
-        }
-        true
-    }
+    // 「窗口内容区」左上角的屏幕坐标(物理像素)。
+    // Tauri 的 outer_position() 返回 PhysicalPosition,左上角是 outer 左上角;
+    // 内容区 = outer 左上角 + 标题栏/边框。本项目窗口无边框且 transparent,
+    // outer 与 inner 基本重合,这里直接用 outer_position 作为内容区原点。
+    let pos = match w.outer_position() {
+        Ok(p) => p,
+        Err(_) => return None,
+    };
+
+    // 鼠标相对窗口内容区左上角的物理像素坐标。
+    let local_x = (pt.x - pos.x) as f64;
+    let local_y = (pt.y - pos.y) as f64;
+
+    // 换算回 CSS 逻辑像素(前端矩形的坐标系),再判定命中。
+    let css_x = local_x / scale;
+    let css_y = local_y / scale;
+
+    let over = point_in_rects(&rects, css_x, css_y);
+    // 命中 → 不穿透(false);未命中 → 穿透(true)。
+    Some(!over)
 }
 
-/// 对外入口:main 窗口创建后调用,安装平台穿透。
-/// Windows:SetWindowRgn 区域裁切;macOS:由 macos_pet 模块处理(见 setup_notify_interactive 分支);
-/// Linux:暂未实现不规则窗口穿透(需要 X11 XShape/XFixes 或 Wayland layer-shell),
-/// 此时仅打印一次友好提示,宠物窗口退化为普通置顶透明窗口(无局部穿透)。
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub fn setup_notify_interactive(_app: &tauri::AppHandle) {
-    eprintln!(
-        "[windows_pet] Linux 暂不支持不规则窗口穿透:宠物窗口将以普通置顶透明窗口显示,\
-         点击宠物区域外也会命中窗口(无穿透)。如需完整支持,请参考 X11 XShape/XFixes 方案。"
-    );
+/// 对外入口:main 窗口创建后调用,启动穿透轮询线程。
+/// 非 Windows 平台为 no-op(macOS 由 macos_pet::setup_notify_interactive 处理)。
+#[cfg(target_os = "windows")]
+pub fn setup_notify_interactive(app: &tauri::AppHandle) {
+    let app_handle = app.clone();
+    thread::spawn(move || {
+        loop {
+            // 每次取最新窗口引用;窗口不存在(已关闭)时跳过本 tick。
+            if let Some(w) = app_handle.get_webview_window("main") {
+                if let Some(should_ignore) = compute_should_ignore(&w) {
+                    // 仅在状态变化时调用,避免每个 tick 都触发样式重算。
+                    let changed = match LAST_IGNORE.lock() {
+                        Ok(mut last) => {
+                            let changed = *last != should_ignore;
+                            *last = should_ignore;
+                            changed
+                        }
+                        Err(_) => true,
+                    };
+                    if changed {
+                        let _ = w.set_ignore_cursor_events(should_ignore);
+                    }
+                }
+            }
+            thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+        }
+    });
 }
+
+/// 非 Windows 平台:dummy 实现,保证 generate_handler! 能拿到符号。
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub fn setup_notify_interactive(_app: &tauri::AppHandle) {}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
-import { isTauri, onEvent, updateInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow, onWindowMoved } from '../tauri'
+import { isTauri, onEvent, updateInteractiveRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow, onWindowMoved } from '../tauri'
 import { petStore, currentPet, openPetPicker, setPetVisible, setCurrentPet, loadPetManifest, MIN_SCALE, MAX_SCALE } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
@@ -167,14 +167,14 @@ const bubbleEl = ref<HTMLElement | null>(null)
 // 根因：v-if 变 false 的瞬间，Vue 会立刻解绑 bubbleEl 这个模板 ref
 // （哪怕元素因为 <Transition> 还留在 DOM 里继续播 220ms 的淡出动画）。
 // reportInteractiveRects() 原本完全依赖 bubbleEl.value 去测量矩形，
-// ref 一旦变 null，气泡矩形就整个从上报列表里消失——SetWindowRgn 收到
-// 的新裁剪区域里根本没有这块，于是气泡在淡出动画播放到一半时就被硬裁掉，
-// 而不是跟着 opacity/scale 一起自然淡出。
+// ref 一旦变 null，气泡矩形就整个从上报列表里消失——后端命中区域收到
+// 的新列表里根本没有这块，于是气泡在淡出动画播放到一半时就被当成「穿透区」，
+// 鼠标划上去时点不动，而不是跟着 opacity/scale 一起自然淡出。
 //
 // 修复：用 Transition 的 @leave 钩子，在气泡刚开始离场、DOM 元素还没被
 // ref 系统追踪但确实还在页面上时，主动测一次它的矩形并缓存下来；
 // reportInteractiveRects() 在 bubbleEl.value 为 null 时改用这个缓存值，
-// 直到 @after-leave（动画真正播完）才清空，此时才真正收窄裁剪区域。
+// 直到 @after-leave（动画真正播完）才清空，此时才真正收窄命中区域。
 type CachedRect = { left: number; top: number; width: number; height: number }
 let leavingBubbleRect: CachedRect | null = null
 
@@ -257,41 +257,36 @@ function reportInteractiveRects(): void {
     }
   }
   // 宠物未就绪时,若 rects 里只有气泡(没有宠物),不要上报这个残缺矩形——
-  // Windows 的 SetWindowRgn 会用它把整个宠物区域裁掉(鼠标穿透、点不动),
-  // 表现为启动「偶尔异常」(取决于宠物清单加载快慢的竞态)。此时直接上报空数组,
-  // 保持整窗可交互,等 currentPet 就绪后由 watch 触发重新上报真实矩形。
+  // Windows 的穿透由后端轮询命中判断维护,上报空数组会让鼠标落到宠物区域时
+  // 被误判为「未命中」→ 整窗穿透 → 点不动。保持整窗可交互,等 currentPet 就绪后
+  // 由 watch 触发重新上报真实矩形。
   if (!hasPetRect && rects.length > 0) {
     void updateInteractiveRects([])
-    void setPetHitRects([])
     return
   }
   // 统一上报可交互矩形（macOS/Windows 同一入口；Linux 目前 no-op）。
-  // 旧接口 setNotifyInteractiveRects / setPetHitRects 仍保留作兼容，但统一走此处。
+  // macOS 由 NSTimer 动态切换 ignoresMouseEvents；Windows 由后端轮询线程
+  // 动态切换 set_ignore_cursor_events——两端都不需要额外的 apply 调用。
   void updateInteractiveRects(rects)
-  // Windows：SetWindowRgn 裁切需显式 apply 即时生效。
-  // 注意：macOS 走 NSTimer 动态穿透，不需要 applyPetHitRects，但多调用一次 harmless。
-  void setPetHitRects(rects)
-  if (hasPetRect) {
-    void applyPetHitRects()
-  }
 }
 
 // 气泡有 enter 动画（transform: translateY(10px) scale(0.96) → 最终态，0.3s），
 // getBoundingClientRect 会把这个 transform 算进去。如果在动画刚开始时就上报矩形，
-// 量到的是缩小/偏移的中间态，而 Windows 的 SetWindowRgn 会用这个矩形直接裁剪窗口的
-// 可绘制区域——一旦动画播完、气泡长到最终大小，就会被"动画刚开始时算出的更小矩形"
-// 裁掉一块，且没有人再重新上报去纠正，裁切因此是持续存在的硬边，而不是一闪而过。
+// 量到的是缩小/偏移的中间态，而穿透命中区域的上报会用这个矩形去判断鼠标是否可交互——
+// 一旦动画播完、气泡长到最终大小，就该用「动画结束后的真实矩形」更新命中区域，
+// 而非动画刚开始时算出的更小矩形；否则气泡区域会被错误地当成「穿透区」，鼠标划上去
+// 点不动，且没有人再重新上报去纠正，表现为持续性的命中偏差，而不是一闪而过。
 //
 // 修复：reportInteractiveRects() 本身仍保留、用于「尽快恢复可交互」的粗略上报；
-// 真正决定裁切边界的权威上报，交给动画确实结束之后（transitionend）再做一次，
+// 真正决定命中边界的权威上报，交给动画确实结束之后（transitionend）再做一次，
 // 并加一个兜底定时器，防止某些边缘情况下 transitionend 没有触发（比如元素在动画
 // 播放途中被 v-if 提前销毁、跳过了 transitionend 事件）。
 //
 // 注意：兜底时长必须 < 气泡淡出动画时长（.bubble-leave-active 为 0.22s = 220ms）。
 // 气泡消失时节点会被 v-if 销毁，::after 箭头不会单独派发 transitionend，
 // 唯一能纠正「含气泡+箭头」命中矩形的就是该兜底定时器。若兜底(340ms)大于淡出(220ms)，
-// 会出现「本体先淡没、箭头因命中矩形仍包含它而晚消失 ~120ms」的错位（Windows 硬边
-// SetWindowRgn 下尤其明显）。故兜底取 200ms，确保权威纠正早于淡出完成，二者同步消失。
+// 会出现「本体先淡没、箭头因命中矩形仍包含它而晚消失 ~120ms」的错位（穿透方案下同样可见）。
+// 故兜底取 200ms，确保权威纠正早于淡出完成，二者同步消失。
 let settleTimer: ReturnType<typeof setTimeout> | null = null
 
 async function reportInteractiveRectsSettled(): Promise<void> {
@@ -494,9 +489,8 @@ watch(
     if (!isTauri) return
     if (v) {
       void showPetWindow()
-      // Windows：窗口从 hide 恢复后 SetWindowRgn 的 region 可能失效，
-      // 需重新把当前命中矩形应用到窗口，否则会露出系统窗口边框/矩形轮廓。
-      void applyPetHitRects()
+      // Windows：窗口从 hide 恢复后,后端轮询会立刻重新评估命中状态,
+      // 无需手动 apply（穿透由 set_ignore_cursor_events 动态维护）。
     } else {
       void hidePetWindow()
     }

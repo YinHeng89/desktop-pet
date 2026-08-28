@@ -93,7 +93,8 @@ export async function emitEvent(event: string, payload: unknown = undefined): Pr
 }
 
 /** 上报可交互矩形（macOS/Windows 统一入口）。
- *  macOS 走 NSTimer 动态穿透，Windows 走 SetWindowRgn 裁切；Linux 目前为 no-op。 */
+ *  macOS 由 NSTimer 动态切换 ignoresMouseEvents；Windows 由后端轮询线程
+ *  动态切换 set_ignore_cursor_events；Linux 目前为 no-op。 */
 export async function updateInteractiveRects(
   rects: Array<[number, number, number, number]>,
 ): Promise<void> {
@@ -103,43 +104,6 @@ export async function updateInteractiveRects(
     await invoke('update_interactive_rects', { rects })
   } catch (e) {
     console.error('[tauri] updateInteractiveRects failed', e)
-  }
-}
-
-/** 上报可交互矩形（macOS 像素穿透用） */
-export async function setNotifyInteractiveRects(
-  rects: Array<[number, number, number, number]>,
-): Promise<void> {
-  if (!isTauri) return
-  try {
-    const invoke = await getInvoke()
-    await invoke('set_notify_interactive_rects', { rects })
-  } catch (e) {
-    console.error('[tauri] setNotifyInteractiveRects failed', e)
-  }
-}
-
-/** 上报可交互矩形（Windows 透明区域穿透用，SetWindowRgn 裁切） */
-export async function setPetHitRects(
-  rects: Array<[number, number, number, number]>,
-): Promise<void> {
-  if (!isTauri) return
-  try {
-    const invoke = await getInvoke()
-    await invoke('set_pet_hit_rects', { rects })
-  } catch (e) {
-    console.error('[tauri] setPetHitRects failed', e)
-  }
-}
-
-/** 触发 Windows 端把当前 hit rects 应用到窗口（SetWindowRgn 即时生效） */
-export async function applyPetHitRects(): Promise<void> {
-  if (!isTauri) return
-  try {
-    const invoke = await getInvoke()
-    await invoke('apply_pet_hit_rects')
-  } catch (e) {
-    console.error('[tauri] applyPetHitRects failed', e)
   }
 }
 
@@ -156,8 +120,6 @@ export async function showPetWindow(): Promise<void> {
 export async function hidePetWindow(): Promise<void> {
   if (!isTauri) return
   try {
-    // 走 Rust command 而非 windowApi.hide()：Rust 内部会先 SetWindowRgn(0) 清空
-    // 像素级裁切区域，再 hide，避免 Windows DWM 按旧 region 渲染装饰闪现窗口边框。
     const invoke = await getInvoke()
     await invoke('hide_pet_window')
   } catch (e) {

@@ -108,27 +108,11 @@ fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
             ((right as f64 - ww * sf).round()) as i32,
             ((bottom as f64 - wh * sf).round()) as i32,
         ));
-        // 尺寸/位置变更后必须重新应用命中矩形裁切：SetWindowRgn 的 region
-        // 是相对窗口左上角的像素区域，窗口 resize/reposition 后旧 region 不会
-        // 自动跟随——若不重裁，区域外那圈透明窗口（方形轮廓）会露出来，
-        // 尤其在气泡出现、窗口尺寸随 scale 变化的瞬间最明显（Windows 上表现为
-        // "隐约的 Windows 窗口"）。前端已上报的 HIT_RECTS 仍是当前有效值，直接复用。
-        #[cfg(target_os = "windows")]
-        {
-            if let Ok(hwnd) = w.hwnd() {
-                windows_pet::apply_hit_rects(hwnd.0 as isize);
-            }
-        }
+        // 提示框尺寸变化无需在 Rust 侧重裁：Windows 端穿透由 windows_pet 的轮询线程
+        // 基于前端上报的矩形持续维护(set_ignore_cursor_events),窗口 resize 不影响命中判断。
     } else {
         // 读不到旧状态（极端情况）时退化为仅改尺寸，避免窗口卡死
         let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
-        // 同上：仅改尺寸也需重裁，避免露出窗口轮廓
-        #[cfg(target_os = "windows")]
-        {
-            if let Ok(hwnd) = w.hwnd() {
-                windows_pet::apply_hit_rects(hwnd.0 as isize);
-            }
-        }
     }
 }
 
@@ -424,8 +408,6 @@ fn main() {
             open_settings_window,
             close_settings_window,
             macos_pet::set_notify_interactive_rects,
-            windows_pet::set_pet_hit_rects,
-            windows_pet::apply_pet_hit_rects,
             interactive::update_interactive_rects,
             windows_pet::hide_pet_window,
             pet_import::import_pet,
