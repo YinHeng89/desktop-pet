@@ -79,11 +79,14 @@ fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     match chunk {
         b"VP8 " => {
             // 帧头：3 字节 tag + 3 字节 start code + 2 字节 width + 2 字节 height
+            // 注意:VP8 (lossy) 的宽高是 16 位小端的「实际像素值」(非减一,也非 14 位)。
+            // 之前误用 VP8L 的 14 位掩码 & 0x3fff 会丢弃高位,宽度 >=16384 时解析错误。
+            // 此处直接取 16 位完整值。
             if payload.len() < 10 {
                 return None;
             }
-            let w = u16::from_le_bytes([payload[6], payload[7]]) as u32 & 0x3fff;
-            let h = u16::from_le_bytes([payload[8], payload[9]]) as u32 & 0x3fff;
+            let w = u16::from_le_bytes([payload[6], payload[7]]) as u32;
+            let h = u16::from_le_bytes([payload[8], payload[9]]) as u32;
             Some((w, h))
         }
         b"VP8L" => {

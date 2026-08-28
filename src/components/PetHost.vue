@@ -240,7 +240,11 @@ function reportInteractiveRects(): void {
   }
   let hasPetRect = false
   const p = petStageEl.value
-  if (p) {
+  // 关键守卫:宠物必须真正加载完(currentPet 就绪)才把宠物区算进可交互矩形。
+  // 仅 petStageEl 有尺寸不够——容器即使宠物图未加载完也可能有布局尺寸,
+  // 此时若算进宠物 rect 会得到「空白/旧图」的错位置;若不算则只有气泡 rect,
+  // 会触发下方「上报空数组」分支,统一保持整窗可交互。
+  if (p && currentPet.value) {
     const r = p.getBoundingClientRect()
     if (r.width > 0 && r.height > 0) {
       hasPetRect = true
@@ -252,14 +256,19 @@ function reportInteractiveRects(): void {
       ])
     }
   }
+  // 宠物未就绪时,若 rects 里只有气泡(没有宠物),不要上报这个残缺矩形——
+  // Windows 的 SetWindowRgn 会用它把整个宠物区域裁掉(鼠标穿透、点不动),
+  // 表现为启动「偶尔异常」(取决于宠物清单加载快慢的竞态)。此时直接上报空数组,
+  // 保持整窗可交互,等 currentPet 就绪后由 watch 触发重新上报真实矩形。
+  if (!hasPetRect && rects.length > 0) {
+    void updateInteractiveRects([])
+    void setPetHitRects([])
+    return
+  }
   // 统一上报可交互矩形（macOS/Windows 同一入口；Linux 目前 no-op）。
   // 旧接口 setNotifyInteractiveRects / setPetHitRects 仍保留作兼容，但统一走此处。
   void updateInteractiveRects(rects)
   // Windows：SetWindowRgn 裁切需显式 apply 即时生效。
-  // 关键守卫：宠物元素尚未渲染（currentPet 异步加载未完成）时，若用「只有气泡、
-  // 没有宠物」的残缺矩形去 SetWindowRgn，会把整个宠物区域裁掉——表现为启动时
-  // 「偶尔异常」（取决于宠物清单加载快慢的竞态）。此时跳过 apply，保持整窗
-  // 可交互（不裁切），等宠物真正渲染出来后由 currentPet 的 watch 触发重新上报。
   // 注意：macOS 走 NSTimer 动态穿透，不需要 applyPetHitRects，但多调用一次 harmless。
   void setPetHitRects(rects)
   if (hasPetRect) {
