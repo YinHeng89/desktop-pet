@@ -1,41 +1,12 @@
-:root {
-  /* 配色（与液态玻璃风统一） */
-  --bg: #eef1f6;
-  --panel: rgba(255, 255, 255, 0.95);
-  --panel-solid: #ffffff;
-  --panel-2: rgba(241, 243, 247, 0.7);
-  --text: #1f2329;
-  --muted: #8a909c;
-  --primary: #3b6ef5;
-  --primary-hover: #2f5fe0;
-  --primary-soft: rgba(59, 110, 245, 0.12);
-  --danger: #e8483a;
-  --danger-soft: rgba(232, 72, 58, 0.12);
-  --success: #2bb673;
-  --warn: #e0a80a;
-  --border: rgba(31, 39, 51, 0.08);
-  --border-strong: rgba(31, 39, 51, 0.16);
-  --text-dim: #8a909c;
-
-  --radius-sm: 12px;
-  --radius-md: 16px;
-  --radius-lg: 22px;
-  --radius-pill: 999px;
-  /* 设置窗口级圆角（PetSettings 窗口与弹窗蒙版用此值，6px 与 DWM ROUNDLARGE 系统档对齐）。
-     气泡圆角保持 14px，不引用此变量。 */
-  --radius-window: 6px;
-
-  --shadow-md: 0 6px 20px rgba(31, 39, 51, 0.1);
-  --shadow-lg: 0 16px 44px rgba(31, 39, 51, 0.16);
-  --glass-hi: inset 0 1px 1px rgba(255, 255, 255, 0.85);
-
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
-    'Helvetica Neue', Arial, sans-serif;
-}
+/* 设计令牌唯一真源：所有色值/圆角/阴影集中到 tokens.css，避免散落硬编码 */
+@import './shared/styles/tokens.css';
 
 * {
   box-sizing: border-box;
+}
+
+:root {
+  font-family: var(--font-family);
 }
 
 html,

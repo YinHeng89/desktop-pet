@@ -57,6 +57,24 @@ fn was_auto_started() -> bool {
     std::env::args().any(|a| a == "--autostart")
 }
 
+/// 返回当前平台标识（"macos" | "windows" | "linux"），供前端消灭 UA 嗅探（R5）。
+/// 编译期按 `#[cfg(target_os)]` 分派，零运行时开销。
+#[tauri::command]
+fn get_platform() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        "macos".into()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "windows".into()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "linux".into()
+    }
+}
+
 /// 前端通用跨窗口广播：invoke 后由 Rust app.emit 广播到所有窗口。
 /// 用于 pet-switch / pet-scale / pet-visible 等前端→前端事件，
 /// 规避前端 emit 跨窗口不生效的问题（走 IPC 更可靠）。
@@ -427,6 +445,7 @@ pub fn run() {
             set_autostart,
             get_autostart,
             was_auto_started,
+            get_platform,
             broadcast_event,
             resize_pet_window,
             open_settings_window,

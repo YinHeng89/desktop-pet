@@ -607,7 +607,7 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 - [ ] **3.9** ★ 新增 `commands/` 薄层
   - `commands/mod.rs` 集中所有命令名常量 + `generate_handler!`
   - 每个 command 函数体 ≤ 20 行：反序列化 → 校验 → 调 `domain`/`platform`/`infra` → 包装错误
-- [ ] **3.10** 新增 `get_platform()` command，返回 `"macos" | "windows" | "linux"`
+- [x] **3.10** 新增 `get_platform()` command，返回 `"macos" | "windows" | "linux"`
   - 前端 `shared/platform/index.ts` 改从此获取（Phase 5.2 对接）
 
 **✅ Phase 3 验收**：`grep -rn "cfg(target_os" src/ | grep -v platform/` **结果为空**；`main.rs` < 120 行；功能基线 A10/A11/D4 在 macOS 与 Windows 双端实测通过。
@@ -645,7 +645,7 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 
 ### Phase 5 前端：基础设施
 
-- [ ] **5.1** ★★ `shared/config/constants.ts`（唯一真源）
+- [x] **5.1** ★★ `shared/config/constants.ts`（唯一真源）
   ```ts
   export const FRAME = { WIDTH: 192, HEIGHT: 208, COLS: 8 } as const
   export const SCALE = { MIN: 0.5, MAX: 1.3, STEP: 0.05, DEFAULT: 0.7 } as const
@@ -669,25 +669,25 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
   export const TIMING = { RANDOM_MIN_MS: 6000, RANDOM_MAX_MS: 15000, CHAT_MS: 3000 } as const
   ```
   - ⚠️ **要求**：后续由 Rust `domain` 通过 ts-rs 生成同值文件，CI 校验两份一致（Phase 9.5）
-- [ ] **5.2** ★ `shared/platform/index.ts`
+- [x] **5.2** ★ `shared/platform/index.ts`
   - `let platform: Platform | null = null`；`initPlatform()` 在 `App.vue` onMounted 调 `get_platform()`
   - `getPlatform()` 同步返回（已初始化后）；未初始化时 fallback 到 `isTauri ? 'unknown' : 'web'`
   - **删除 `PetHost.vue:11-13` 的 `navigator.platform` 嗅探**
-- [ ] **5.3** ★ `shared/ipc/client.ts`
+- [x] **5.3** ★ `shared/ipc/client.ts`
   - `invokeTyped<T>(cmd, args?, opts?: {timeoutMs})`：统一 catch → 抛 `AppError`（含 code）
   - 非 Tauri 环境返回 `Result` 风格的 fallback（可配置）
   - 集中日志（带命令名）
-- [ ] **5.4** ★ `shared/ipc/events.ts`
+- [x] **5.4** ★ `shared/ipc/events.ts`
   - `emitCrossWindow(event, payload)`：自动附加 `source: windowId`
   - `onCrossWindow(event, handler)`：自动跳过 `source === myWindowId`（**替代现有"值相等防回环"**）
   - 内部维护 listener 集合，提供 `disposeAll()`
-- [ ] **5.5** `shared/errors/AppError.ts` + `messages.ts`
+- [x] **5.5** `shared/errors/AppError.ts` + `messages.ts`
   - `AppError { code, message, cause? }`；`messages.ts` 做 `ErrorCode → 中文文案` 映射（与 Rust `ErrorCode` 一一对应）
-- [ ] **5.6** ★ `src/test/mocks/tauri.ts`
+- [x] **5.6** ★ `src/test/mocks/tauri.ts`
   - mock `@tauri-apps/api/core`（invoke）、`@tauri-apps/api/event`（listen/emit）、`@tauri-apps/api/window`
   - 提供 `mockInvoke(map)` / `emitEvent(name, payload)` / `invocationLog()` 断言工具
   - **这是让全部前端逻辑可在 jsdom 下测试的关键**
-- [ ] **5.7** `shared/styles/tokens.css`：把 `style.css` 的 `:root` 变量整体迁入，作为**设计令牌唯一真源**
+- [x] **5.7** `shared/styles/tokens.css`：把 `style.css` 的 `:root` 变量整体迁入，作为**设计令牌唯一真源**
   - 补充缺失令牌：`--radius-bubble: 14px`、`--radius-window: 6px`、`--radius-modal: 8px`、`--shadow-bubble`
   - ⚠️ **解决 6px/8px 矛盾**：明确 `settings 窗口/蒙版 = --radius-window(6px)`，`弹窗卡片 = --radius-modal(8px)`，注释与代码统一
 
