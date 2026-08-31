@@ -1,0 +1,6 @@
+# clippy 配置（PetBuddy）
+
+# MSRV：tauri 2 官方要求 Rust >= 1.77.2。
+# 设置后 clippy 不会建议超出该版本的标准库 / 语言特性，
+# 避免在低版本工具链（如 CI 的 stable 回退版本）上编译失败。
+msrv = "1.77.0"

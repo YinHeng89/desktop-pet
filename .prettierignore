@@ -1,0 +1,20 @@
+# 依赖
+node_modules
+
+# 构建产物
+dist
+src-tauri/target
+src-tauri/gen
+
+# Rust 由 cargo fmt 负责，prettier 不介入
+src-tauri
+
+# 官网静态页：独立维护的纯静态资源，暂不纳入本仓库格式化范围
+# （若后续 website 也接入构建流程，再从此处移除）
+website
+
+# 锁文件由 npm 自行维护
+package-lock.json
+
+# ts-rs 生成物（Phase 9 契约测试引入）
+src/bindings

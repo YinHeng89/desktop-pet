@@ -1,0 +1,132 @@
+name: Quality
+
+# 质量门禁：typecheck / lint / format / test / clippy
+#
+# 本 workflow 应设为分支保护中的 **required status check**，
+# 禁止在未通过本门禁的情况下合入 main（见 docs/refactor/REFACTOR_PLAN.md §10.2）。
+#
+# 与 build-windows.yml 的分工：
+#   - quality.yml      : 每次 push / PR 都跑，保证代码质量不劣化
+#   - build-windows.yml: 仅在打 tag / 手动触发时构建并发布
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend · typecheck / lint / format / test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # 22：满足 eslint(^22.13)、vitest(^22)、jsdom 的 engines 要求。
+          # 若升级依赖后 engines 收紧到此之上，需同步调整本值。
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npx prettier --check .
+
+      - name: Test with coverage
+        run: npm run test:cov
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-frontend
+          path: coverage/
+          retention-days: 7
+
+  rust:
+    name: Rust · fmt / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-quality-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Install Linux system dependencies
+        # Tauri 2 在 Linux 上需要 webkit2gtk 等系统库才能编译
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  rust-windows:
+    name: Rust · clippy (windows cfg 分支)
+    # 上面的 linux job 不会编译 #[cfg(target_os = "windows")] 分支
+    # （windows_pet.rs / autostart.rs / main.rs 中的 Windows 实现）。
+    # 本 job 专门覆盖这些分支，避免 -D warnings 只在 Linux 上成立。
+    #
+    # 说明：macOS 分支（macos_pet.rs 的 objc2 实现）暂无对应 CI job，
+    # 依赖贡献者在 macOS 本地执行 `npm run verify` 覆盖。
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-quality-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Clippy (windows)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

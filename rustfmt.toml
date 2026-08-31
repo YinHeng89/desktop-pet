@@ -1,0 +1,13 @@
+# rustfmt 配置（PetBuddy）
+#
+# 说明：本文件是在项目中期引入的，因此在 `cargo fmt` 之前的历史提交
+# 并未按此格式。首次全量格式化已登记在 .git-blame-ignore-revs 中，
+# 避免 `git blame` 被格式化提交淹没。
+
+edition = "2021"
+
+# 与 .prettierrc 的 printWidth 保持一致，减少跨语言阅读时的视觉割裂
+max_width = 100
+
+# 保持默认：use_small_heuristics = "Default"
+# 已有代码大量使用该默认行为，显式改设会产生无意义的大面积 diff。

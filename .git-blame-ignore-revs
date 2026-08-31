@@ -1,0 +1,21 @@
+# 让 git blame 忽略「纯格式化」提交
+#
+# 背景：本项目在中期才引入 rustfmt / prettier，首次全量格式化会产生一个
+# 改动面很大、但不含任何逻辑变化的提交。若不登记，之后所有 `git blame`
+# 都会指向这次格式化，淹没真正的作者与意图。
+#
+# ── 使用方法（在格式化提交落地后立即执行）────────────────────────
+#   1. 确认格式化提交已 push 到 main
+#   2. 把该提交的 hash 追加到本文件末尾：
+#        git rev-parse HEAD >> .git-blame-ignore-revs
+#   3. 让本机 git 读取本文件（每个克隆都要执行一次）：
+#        git config blame.ignoreRevsFile .git-blame-ignore-revs
+#   4. 验证：
+#        git blame src/components/PetHost.vue    # 应看到格式化之前的真实作者
+#
+# 说明：GitHub 的 Web blame 会自动读取仓库根目录的 .git-blame-ignore-revs，
+#      无需额外配置；本地需执行第 3 步。
+#
+# ── 登记项 ──────────────────────────────────────────────────────
+# TODO: 追加「chore: 首次全量格式化（rustfmt + prettier）」提交的 hash。
+#       形如：3f9a1c2e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39

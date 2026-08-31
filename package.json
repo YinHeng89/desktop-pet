@@ -4,22 +4,48 @@
   "version": "0.1.66",
   "type": "module",
   "description": "PetBuddy — 跨平台桌面宠物 + 通用通知接收器",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "typecheck": "vue-tsc --noEmit",
+    "lint": "eslint .",
+    "lint:strict": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write . && npm run format:rust",
+    "format:check": "prettier --check . && npm run format:rust:check",
+    "format:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "format:rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:cov": "vitest run --coverage",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run test:rust"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",
     "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@tauri-apps/cli": "^2.1.0",
     "@vitejs/plugin-vue": "^5.2.1",
+    "@vitest/coverage-v8": "^4.1.11",
+    "@vue/test-utils": "^2.5.0",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.10.0",
+    "jsdom": "^30.0.1",
+    "prettier": "^3.9.6",
     "typescript": "^5.6.3",
+    "typescript-eslint": "^8.68.0",
     "vite": "^6.0.3",
+    "vitest": "^4.1.11",
+    "vue-eslint-parser": "^10.4.1",
     "vue-tsc": "^2.1.10"
   }
 }
