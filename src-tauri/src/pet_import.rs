@@ -581,6 +581,37 @@ const CODEPET_GITHUB_RAW: &str =
 /// 预览图基地址（codexpet.top 提供，已实测可用；加载失败前端回退文字）
 const CODEPET_PREVIEW_BASE: &str = "https://codexpet.top/assets/previews";
 
+/// 建连超时。
+const HTTP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// 单次请求总超时。
+///
+/// 必须设置：`reqwest` 默认**没有**超时，网络挂起时 Promise 永不 resolve，
+/// 前端画廊会一直卡在 loading，用户只能杀进程。
+const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// 共享的 HTTP 客户端（连接复用）。
+static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+/// 获取共享 HTTP 客户端：统一 UA 与超时，并复用连接池。
+///
+/// 用 OnceLock 而非每次新建，避免每次浏览/下载都重建 TLS 上下文与连接池。
+fn http_client() -> Result<&'static reqwest::Client, String> {
+    if let Some(c) = HTTP_CLIENT.get() {
+        return Ok(c);
+    }
+    let client = reqwest::Client::builder()
+        .user_agent("PetBuddy/0.1 (online-gallery)")
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .timeout(HTTP_TIMEOUT)
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    // 并发下可能已被其它线程写入；插入失败无害，取已有值即可
+    let _ = HTTP_CLIENT.set(client);
+    HTTP_CLIENT
+        .get()
+        .ok_or_else(|| "HTTP 客户端未初始化".to_string())
+}
+
 /// 在线宠物列表项（画廊用）。来自 awesome-codex-pet 的 pets.json 索引。
 #[derive(Serialize, Clone)]
 pub struct OnlinePetMeta {
@@ -619,10 +650,7 @@ struct RawOnlinePet {
 #[tauri::command]
 pub async fn browse_online_pets() -> Result<Vec<OnlinePetMeta>, String> {
     let url = format!("{CODEPET_GITHUB_RAW}/pets.json");
-    let client = reqwest::Client::builder()
-        .user_agent("PetBuddy/0.1 (online-gallery)")
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let client = http_client()?;
 
     let resp = client
         .get(&url)
@@ -713,10 +741,7 @@ pub async fn download_online_pet(
         return Err("宠物 slug 含非法字符".into());
     }
 
-    let client = reqwest::Client::builder()
-        .user_agent("PetBuddy/0.1 (online-gallery)")
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let client = http_client()?;
 
     let json_url = format!("{CODEPET_GITHUB_RAW}/pets/{slug}/pet.json");
     let sheet_url = format!("{CODEPET_GITHUB_RAW}/pets/{slug}/spritesheet.webp");
@@ -865,5 +890,16 @@ mod tests {
         let raw: RawPetJson = serde_json::from_str(&out).unwrap();
         let pets_root = std::path::Path::new("/tmp/pets");
         assert_eq!(pets_root.join(&raw.id), pets_root.join(slug));
+    }
+
+    // ── http_client ──
+
+    #[test]
+    fn http_client_is_reused_across_calls() {
+        // 验证 OnceLock 生效：不是每次调用都新建客户端（否则连接池形同虚设）。
+        // 超时配置无法从 reqwest::Client 读回断言，故只验证复用这一条可观测性质。
+        let a = http_client().unwrap();
+        let b = http_client().unwrap();
+        assert!(std::ptr::eq(a, b));
     }
 }
