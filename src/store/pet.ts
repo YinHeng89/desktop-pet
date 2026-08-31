@@ -106,15 +106,17 @@ export async function loadPetManifest(): Promise<void> {
 async function loadExternalPets(): Promise<void> {
   try {
     const core = await import('@tauri-apps/api/core')
-    const list = await core.invoke<Array<{
-      id: string
-      display_name: string
-      description: string
-      spritesheet: string
-      idle: FrameSeq
-      talk: FrameSeq
-      actions: Record<string, FrameSeq>
-    }>>('list_imported_pets')
+    const list = await core.invoke<
+      Array<{
+        id: string
+        display_name: string
+        description: string
+        spritesheet: string
+        idle: FrameSeq
+        talk: FrameSeq
+        actions: Record<string, FrameSeq>
+      }>
+    >('list_imported_pets')
     if (!list || !Array.isArray(list)) return
     for (const ext of list) {
       if (petStore.pets.some((p) => p.id === ext.id)) continue
@@ -212,7 +214,7 @@ export async function deleteExternalPet(id: string): Promise<void> {
 
 export async function updateExternalPet(
   id: string,
-  patch: { displayName?: string; description?: string }
+  patch: { displayName?: string; description?: string },
 ): Promise<void> {
   const core = await import('@tauri-apps/api/core')
   await core.invoke('update_imported_pet', {

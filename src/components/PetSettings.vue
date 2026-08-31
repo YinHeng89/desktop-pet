@@ -2,9 +2,32 @@
 // 宠物设置页（settings 窗口整页内容）。
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
-import { petStore, currentPet, setCurrentPet, setPetScale, setPetVisible, importExternalPet, deleteExternalPet, updateExternalPet, registerDownloadedPet, loadPetManifest, MIN_SCALE, MAX_SCALE, type PetDef } from '../store/pet'
+import {
+  petStore,
+  currentPet,
+  setCurrentPet,
+  setPetScale,
+  setPetVisible,
+  importExternalPet,
+  deleteExternalPet,
+  updateExternalPet,
+  registerDownloadedPet,
+  loadPetManifest,
+  MIN_SCALE,
+  MAX_SCALE,
+  type PetDef,
+} from '../store/pet'
 import { pushNotify } from '../store/notify'
-import { closeSettingsWindow, startDragging, browseOnlinePets, downloadOnlinePet, openExternal, preloadTauri, onEvent, type OnlinePetMeta } from '../tauri'
+import {
+  closeSettingsWindow,
+  startDragging,
+  browseOnlinePets,
+  downloadOnlinePet,
+  openExternal,
+  preloadTauri,
+  onEvent,
+  type OnlinePetMeta,
+} from '../tauri'
 import SpritePet from './SpritePet.vue'
 
 // settings 窗口是独立 webview，pets 由 App.vue onMounted 异步加载；
@@ -41,14 +64,24 @@ onMounted(() => {
   })
 
   // 左侧底部版本号：读取 Tauri 打包时嵌入的版本（来自 tauri.conf.json）
-  getVersion().then((v) => { appVersion.value = v }).catch(() => {})
+  getVersion()
+    .then((v) => {
+      appVersion.value = v
+    })
+    .catch(() => {})
 })
 
 let unlistenVisible: (() => void) | null = null
 let unlistenSwitch: (() => void) | null = null
 onUnmounted(() => {
-  if (unlistenVisible) { unlistenVisible(); unlistenVisible = null }
-  if (unlistenSwitch) { unlistenSwitch(); unlistenSwitch = null }
+  if (unlistenVisible) {
+    unlistenVisible()
+    unlistenVisible = null
+  }
+  if (unlistenSwitch) {
+    unlistenSwitch()
+    unlistenSwitch = null
+  }
 })
 
 // 设置界面左下角显示的版本号（来自 tauri.conf.json）
@@ -174,7 +207,10 @@ function openNotifyModal(): void {
   notifyText.value = ''
   notifyError.value = ''
   cooldownLeft.value = 0
-  if (cooldownTimer) { clearInterval(cooldownTimer); cooldownTimer = null }
+  if (cooldownTimer) {
+    clearInterval(cooldownTimer)
+    cooldownTimer = null
+  }
   notifyModalOpen.value = true
 }
 function closeNotifyModal(): void {
@@ -193,7 +229,10 @@ async function sendNotify(): Promise<void> {
       cooldownLeft.value -= 1
       if (cooldownLeft.value <= 0) {
         cooldownLeft.value = 0
-        if (cooldownTimer) { clearInterval(cooldownTimer); cooldownTimer = null }
+        if (cooldownTimer) {
+          clearInterval(cooldownTimer)
+          cooldownTimer = null
+        }
       }
     }, 1000)
   } catch (e) {
@@ -257,9 +296,7 @@ const filteredOnlinePets = computed<OnlinePetMeta[]>(() => {
 })
 
 // 已下载到本地的 slug 集合（避免重复下载）
-const installedSlugs = computed<Set<string>>(
-  () => new Set(petStore.pets.map((p) => p.id)),
-)
+const installedSlugs = computed<Set<string>>(() => new Set(petStore.pets.map((p) => p.id)))
 
 function openGallery(): void {
   galleryOpen.value = true
@@ -357,7 +394,11 @@ function onRootMouseDown(e: MouseEvent): void {
   if (e.button !== 0) return
   const target = e.target as HTMLElement
   // 交互元素不启动窗口拖拽
-  if (target.closest('button, a, input, textarea, select, .s-slider, .s-card, .s-gallery-card, .s-item, .s-toggle, .s-modal, .s-editpet, .s-gallery')) {
+  if (
+    target.closest(
+      'button, a, input, textarea, select, .s-slider, .s-card, .s-gallery-card, .s-item, .s-toggle, .s-modal, .s-editpet, .s-gallery',
+    )
+  ) {
     return
   }
   sDragging = true
@@ -392,7 +433,15 @@ function onRootMouseUp(): void {
   <div class="settings-root" @mousedown="onRootMouseDown">
     <div class="s-header">
       <span class="s-brand">
-        <svg class="s-brand-icon" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <svg
+          class="s-brand-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
           <defs>
             <linearGradient id="brand-grad" x1="0" y1="0" x2="1" y2="1">
               <stop offset="0%" stop-color="var(--primary, #3b6ef5)" />
@@ -473,7 +522,16 @@ function onRootMouseUp(): void {
               title="编辑宠物信息"
               @click.stop="openEditPet(p)"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <path d="M12 20h9" />
                 <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
               </svg>
@@ -485,7 +543,17 @@ function onRootMouseUp(): void {
               :title="pendingDeleteId === p.id ? '再次点击确认删除' : '删除该宠物'"
               @click.stop="onDeleteClick(p)"
             >
-              <svg v-if="pendingDeleteId !== p.id" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg
+                v-if="pendingDeleteId !== p.id"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <path d="M3 6h18" />
                 <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                 <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
@@ -497,14 +565,32 @@ function onRootMouseUp(): void {
 
         <div class="s-add-row">
           <button class="s-add" :disabled="importing" @click="onPickFile">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <path d="M12 5v14" />
               <path d="M5 12h14" />
             </svg>
             <span>{{ importing ? '导入中…' : '本地导入' }}</span>
           </button>
           <button class="s-add s-add-online" :disabled="importing" @click="openGallery">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <circle cx="12" cy="12" r="9" />
               <path d="M3 12h18" />
               <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18" />
@@ -513,7 +599,13 @@ function onRootMouseUp(): void {
           </button>
         </div>
         <div v-if="importError" class="s-import-error">{{ importError }}</div>
-        <input ref="fileInput" type="file" accept=".zip" style="display: none" @change="onFileChosen" />
+        <input
+          ref="fileInput"
+          type="file"
+          accept=".zip"
+          style="display: none"
+          @change="onFileChosen"
+        />
       </div>
     </div>
 
@@ -525,9 +617,19 @@ function onRootMouseUp(): void {
             <span class="s-gallery-title">在线画廊</span>
             <span class="s-gallery-source">
               数据来源：
-              <a class="s-gallery-link" href="https://github.com/legeling/awesome-codex-pet" @click.prevent="openExternal('https://github.com/legeling/awesome-codex-pet')">awesome-codex-pet（GitHub 开源仓库）</a>
+              <a
+                class="s-gallery-link"
+                href="https://github.com/legeling/awesome-codex-pet"
+                @click.prevent="openExternal('https://github.com/legeling/awesome-codex-pet')"
+                >awesome-codex-pet（GitHub 开源仓库）</a
+              >
               · 预览图由
-              <a class="s-gallery-link" href="https://codexpet.top" @click.prevent="openExternal('https://codexpet.top')">codexpet.top</a>
+              <a
+                class="s-gallery-link"
+                href="https://codexpet.top"
+                @click.prevent="openExternal('https://codexpet.top')"
+                >codexpet.top</a
+              >
               提供
             </span>
           </div>
@@ -548,7 +650,15 @@ function onRootMouseUp(): void {
               aria-label="清空搜索"
               @click="galleryKeyword = ''"
             >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 10 10"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              >
                 <line x1="2" y1="2" x2="8" y2="8" />
                 <line x1="8" y1="2" x2="2" y2="8" />
               </svg>
@@ -626,14 +736,17 @@ function onRootMouseUp(): void {
           <div class="s-modal-tips">
             <div class="s-tips-sub">HTTP 接口（任意外部程序，端口 8756）</div>
             <div class="s-code-wrap">
-              <pre class="s-code">curl -X POST http://127.0.0.1:8756/notify \
+              <pre class="s-code">
+curl -X POST http://127.0.0.1:8756/notify \
   -H 'Content-Type: application/json' \
   -d '{"text":"下班啦！","action":"idle"}'</pre>
               <button class="s-copy-btn" :class="{ copied: curlCopied }" @click="copyCurl">
                 {{ curlCopied ? '已复制' : '复制' }}
               </button>
             </div>
-            <div class="s-tips-note">提示：宠物需处于「显示」状态才能看到气ß泡；双击气泡或 3 条后会自动消失。</div>
+            <div class="s-tips-note">
+              提示：宠物需处于「显示」状态才能看到气ß泡；双击气泡或 3 条后会自动消失。
+            </div>
           </div>
         </div>
         <div class="s-modal-foot">
@@ -642,10 +755,12 @@ function onRootMouseUp(): void {
             class="s-modal-send"
             :disabled="!notifyText.trim() || cooldownLeft > 0"
             @click="sendNotify"
-          >{{ cooldownLeft > 0 ? `冷却中 ${cooldownLeft}s` : '发送通知' }}</button>
+          >
+            {{ cooldownLeft > 0 ? `冷却中 ${cooldownLeft}s` : '发送通知' }}
+          </button>
         </div>
       </div>
-      </div>
+    </div>
     <!-- 编辑外部宠物弹窗 -->
     <div v-if="editPetOpen" class="s-editpet-mask" @click.self="closeEditPet">
       <div class="s-editpet">
@@ -678,11 +793,9 @@ function onRootMouseUp(): void {
         </div>
         <div class="s-editpet-foot">
           <button class="s-editpet-cancel" @click="closeEditPet">取消</button>
-          <button
-            class="s-editpet-save"
-            :disabled="editPetSaving"
-            @click="saveEditPet"
-          >{{ editPetSaving ? '保存中…' : '保存' }}</button>
+          <button class="s-editpet-save" :disabled="editPetSaving" @click="saveEditPet">
+            {{ editPetSaving ? '保存中…' : '保存' }}
+          </button>
         </div>
       </div>
     </div>
@@ -754,7 +867,7 @@ function onRootMouseUp(): void {
 }
 .s-close::before,
 .s-close::after {
-  content: "";
+  content: '';
   position: absolute;
   left: 50%;
   top: 50%;
@@ -933,7 +1046,9 @@ function onRootMouseUp(): void {
   border-radius: var(--radius-pill);
   cursor: pointer;
   box-shadow: 0 6px 16px rgba(59, 110, 245, 0.28);
-  transition: filter 0.18s ease, transform 0.12s ease;
+  transition:
+    filter 0.18s ease,
+    transform 0.12s ease;
 }
 .s-test-btn:hover {
   filter: brightness(1.06);
@@ -950,7 +1065,7 @@ function onRootMouseUp(): void {
   gap: 7px;
   font-size: 12px;
   font-weight: 600;
-  font-family: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, Consolas, monospace;
   letter-spacing: 1px;
   background: linear-gradient(135deg, var(--primary, #3b6ef5), #8a5cf6);
   -webkit-background-clip: text;
@@ -961,7 +1076,7 @@ function onRootMouseUp(): void {
 }
 /* 版本号前的小圆点，增强质感 */
 .s-version::before {
-  content: "";
+  content: '';
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -1511,7 +1626,9 @@ function onRootMouseUp(): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 .s-gallery-clear:hover {
   background: rgba(31, 39, 51, 0.12);

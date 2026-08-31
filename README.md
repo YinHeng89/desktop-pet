@@ -98,10 +98,10 @@ requests.post("http://127.0.0.1:8756/notify",
 Node.js：
 
 ```js
-await fetch("http://127.0.0.1:8756/notify", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ text: "来自 Node 的通知", action: "jump" }),
+await fetch('http://127.0.0.1:8756/notify', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ text: '来自 Node 的通知', action: 'jump' }),
 })
 ```
 
@@ -171,11 +171,11 @@ pet/                       # 外部宠物 zip 素材（开发用，可导入测�
 
 ## 平台支持
 
-| 功能 | macOS | Windows | Linux |
-| --- | --- | --- | --- |
-| 透明无边框窗口 + 穿透 | ✅（NSTimer 动态切换） | ✅（SetWindowRgn 裁切） | ⚠️ 配置已就位，未经实测 |
-| 开机自启 | ✅（SMAppService 登录项） | ✅（Startup 文件夹 `.lnk` 快捷方式） | ❌ |
-| 在线画廊 / 外部导入 | ✅ | ✅ | ✅ |
-| 通知 HTTP 接口 | ✅ | ✅ | ✅ |
+| 功能                  | macOS                     | Windows                              | Linux                   |
+| --------------------- | ------------------------- | ------------------------------------ | ----------------------- |
+| 透明无边框窗口 + 穿透 | ✅（NSTimer 动态切换）    | ✅（SetWindowRgn 裁切）              | ⚠️ 配置已就位，未经实测 |
+| 开机自启              | ✅（SMAppService 登录项） | ✅（Startup 文件夹 `.lnk` 快捷方式） | ❌                      |
+| 在线画廊 / 外部导入   | ✅                        | ✅                                   | ✅                      |
+| 通知 HTTP 接口        | ✅                        | ✅                                   | ✅                      |
 
 > 打包前会自动重新生成托盘图标（见 `scripts/`，无需手动处理）。

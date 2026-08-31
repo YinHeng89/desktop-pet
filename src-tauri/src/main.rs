@@ -1,19 +1,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod autostart;
-mod macos_pet;
-mod windows_pet;
-mod pet_import;
-mod notify_server;
 mod geometry;
 mod interactive;
+mod macos_pet;
+mod notify_server;
+mod pet_import;
+mod windows_pet;
 
-use tauri::{Emitter, Listener, Manager};
-#[cfg(target_os = "macos")]
-use tauri::ActivationPolicy;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+#[cfg(target_os = "macos")]
+use tauri::ActivationPolicy;
 use tauri::WindowEvent;
+use tauri::{Emitter, Listener, Manager};
 
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
@@ -89,7 +89,9 @@ fn pet_window_size(scale: f64) -> (f64, f64) {
 /// 缩放时以窗口【右下角】为锚点重新定位：宠物贴窗口右下角，原地缩放不漂移。
 #[tauri::command]
 fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
-    let Some(w) = app.get_webview_window("main") else { return };
+    let Some(w) = app.get_webview_window("main") else {
+        return;
+    };
     let scale = geometry::clamp_scale(scale);
 
     let (ww, wh) = pet_window_size(scale);
@@ -214,7 +216,8 @@ fn close_settings_window(app: tauri::AppHandle) {
 /// 构建托盘菜单（PetBuddy 无登录态，菜单固定）
 fn build_tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let open_settings = MenuItem::with_id(app, "open_settings", "打开设置", true, None::<&str>)?;
-    let toggle_visible = MenuItem::with_id(app, "toggle_visible", "显示/隐藏宠物", true, None::<&str>)?;
+    let toggle_visible =
+        MenuItem::with_id(app, "toggle_visible", "显示/隐藏宠物", true, None::<&str>)?;
     // 开机自启用 CheckMenuItem：勾选状态反映当前是否已开启
     let autostart_enabled = autostart::is_enabled().unwrap_or(false);
     let autostart = CheckMenuItem::with_id(
@@ -234,16 +237,35 @@ fn build_tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     ];
     for (ext_id, ext_name) in pet_import::list_imported_pet_meta(app) {
         let menu_id = format!("pet:{}", ext_id);
-        pet_items.push(MenuItem::with_id(app, menu_id.as_str(), ext_name.as_str(), true, None::<&str>)?);
+        pet_items.push(MenuItem::with_id(
+            app,
+            menu_id.as_str(),
+            ext_name.as_str(),
+            true,
+            None::<&str>,
+        )?);
     }
-    pet_items.push(MenuItem::with_id(app, "pet:more", "更多设置…", true, None::<&str>)?);
-    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
-        pet_items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
+    pet_items.push(MenuItem::with_id(
+        app,
+        "pet:more",
+        "更多设置…",
+        true,
+        None::<&str>,
+    )?);
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = pet_items
+        .iter()
+        .map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
+        .collect();
     let pet_menu = Submenu::with_items(app, "切换宠物", true, &refs)?;
 
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
-        vec![&open_settings, &toggle_visible, &autostart, &pet_menu, &quit];
+    let items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![
+        &open_settings,
+        &toggle_visible,
+        &autostart,
+        &pet_menu,
+        &quit,
+    ];
     Menu::with_items(app, &items)
 }
 
@@ -271,17 +293,15 @@ fn main() {
                     // 紧凑宠物窗口（气泡在上 + 宠物在下），定位屏幕右下角（避 Dock）。
                     // 初始尺寸用语公式（scale=0.7，与前端 DEFAULT_SCALE 一致），
                     // 避免 setup 用裸 320×380 而前端 onMounted 再 resize 导致首屏跳动。
-                    if let Ok(monitor) = w.current_monitor() {
-                        if let Some(mon) = monitor {
-                            let size = mon.size();
-                            let scale = mon.scale_factor();
-                            let (ww, wh) = pet_window_size(0.7);
-                            // 逻辑坐标：右边距 24、底边距 75（避开 Dock）
-                            let x = (size.width as f64 / scale) - ww - 24.0;
-                            let y = (size.height as f64 / scale) - wh - 75.0;
-                            let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
-                            let _ = w.set_position(tauri::LogicalPosition::new(x, y));
-                        }
+                    if let Ok(Some(mon)) = w.current_monitor() {
+                        let size = mon.size();
+                        let scale = mon.scale_factor();
+                        let (ww, wh) = pet_window_size(0.7);
+                        // 逻辑坐标：右边距 24、底边距 75（避开 Dock）
+                        let x = (size.width as f64 / scale) - ww - 24.0;
+                        let y = (size.height as f64 / scale) - wh - 75.0;
+                        let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
+                        let _ = w.set_position(tauri::LogicalPosition::new(x, y));
                     }
                     // 安装穿透（作用于 main 宠物窗口）
                     macos_pet::setup_notify_interactive(app.handle());
@@ -289,7 +309,7 @@ fn main() {
                     // 启动时显式设为 Accessory：纯托盘、不占 Dock。
                     // 即便 Info.plist 的 LSUIElement=true 已保证初始为 Agent，这里再
                     // 显式设一次可兼容 `tauri dev`（dev 不读 Info.plist，必须运行时切）。
-                    let _ = app.set_activation_policy(ActivationPolicy::Accessory);
+                    app.set_activation_policy(ActivationPolicy::Accessory);
                 }
             }
 
@@ -304,16 +324,14 @@ fn main() {
                     // 用 64px 底边距 + 24px 右边距兜底，避免宠物被任务栏遮住。
                     // 初始尺寸用语公式（scale=0.7，与前端 DEFAULT_SCALE 一致），
                     // 避免 setup 用裸 320×380 而前端 onMounted 再 resize 导致首屏跳动。
-                    if let Ok(monitor) = w.current_monitor() {
-                        if let Some(mon) = monitor {
-                            let size = mon.size();
-                            let scale = mon.scale_factor();
-                            let (ww, wh) = pet_window_size(0.7);
-                            let x = (size.width as f64 / scale) - ww - 24.0;
-                            let y = (size.height as f64 / scale) - wh - 64.0;
-                            let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
-                            let _ = w.set_position(tauri::LogicalPosition::new(x, y));
-                        }
+                    if let Ok(Some(mon)) = w.current_monitor() {
+                        let size = mon.size();
+                        let scale = mon.scale_factor();
+                        let (ww, wh) = pet_window_size(0.7);
+                        let x = (size.width as f64 / scale) - ww - 24.0;
+                        let y = (size.height as f64 / scale) - wh - 64.0;
+                        let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
+                        let _ = w.set_position(tauri::LogicalPosition::new(x, y));
                     }
                     windows_pet::setup_notify_interactive(app.handle());
                     // 定位完成后再显示，避免先以默认位置闪现一帧再瞬移右下角。
@@ -343,7 +361,7 @@ fn main() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
-                        let _ = app.exit(0);
+                        app.exit(0);
                     }
                     "open_settings" => {
                         open_settings_window(app.clone());
@@ -370,7 +388,11 @@ fn main() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        ..
+                    } = event
+                    {
                         let app = tray.app_handle();
                         open_settings_window(app.clone());
                     }
@@ -402,7 +424,9 @@ fn main() {
                         // macOS：经此路径关闭设置窗口时也要降回 Accessory，否则 Dock 残留。
                         #[cfg(target_os = "macos")]
                         {
-                            let _ = window.app_handle().set_activation_policy(ActivationPolicy::Accessory);
+                            let _ = window
+                                .app_handle()
+                                .set_activation_policy(ActivationPolicy::Accessory);
                         }
                     }
                     // 用户拖动设置窗口时实时保存最后位置，下次打开恢复（而非重置居中）

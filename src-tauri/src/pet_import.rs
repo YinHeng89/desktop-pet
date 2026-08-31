@@ -68,6 +68,7 @@ fn seq(row: u32, count: u32, fps: u32) -> FrameSeqJson {
 ///   - VP8 (lossy)   : "VP8 " chunk，帧头 10 字节，第 6~9 字节为 14 位 width/height
 ///   - VP8L (lossless): "VP8L" chunk，5 字节，含 14 位 width/height
 ///   - VP8X (extended): "VP8X" chunk，含 24 位 width-1/height-1
+///
 /// 返回 (width, height)，无法识别时返回 None。
 fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     // RIFF 头：'RIFF' + size(4) + 'WEBP'
@@ -131,7 +132,11 @@ fn clamp_seq(s: FrameSeqJson, rows: u32) -> Option<FrameSeqJson> {
         return None;
     }
     // 该行最多 FRAME_COLS 帧，count 不应超过
-    let count = if s.count == 0 { FRAME_COLS } else { s.count.min(FRAME_COLS) };
+    let count = if s.count == 0 {
+        FRAME_COLS
+    } else {
+        s.count.min(FRAME_COLS)
+    };
     if count == 0 {
         return None;
     }
@@ -161,7 +166,8 @@ fn default_actions() -> std::collections::BTreeMap<String, FrameSeqJson> {
 /// 极简 base64 编码（标准库实现，避免额外依赖）
 fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    // 每 3 字节编码为 4 字符；不足 3 字节的尾部按 1 组计（等价旧的 (len + 2) / 3）
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = *chunk.get(1).unwrap_or(&0) as u32;
@@ -169,8 +175,16 @@ fn base64_encode(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(TABLE[(n >> 18) as usize & 63] as char);
         out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -246,7 +260,11 @@ fn build_pet_def(raw: &RawPetJson, spritesheet_bytes: &[u8]) -> PetDefJson {
     let actions_raw = raw
         .actions
         .as_ref()
-        .map(|m| m.iter().map(|(k, s)| (k.clone(), seq(s.row, s.count, s.fps))).collect())
+        .map(|m| {
+            m.iter()
+                .map(|(k, s)| (k.clone(), seq(s.row, s.count, s.fps)))
+                .collect()
+        })
         .unwrap_or_else(default_actions);
 
     // 越界修正：idle/talk 必须有，越界则回退到 row 0
@@ -265,7 +283,10 @@ fn build_pet_def(raw: &RawPetJson, spritesheet_bytes: &[u8]) -> PetDefJson {
             .clone()
             .unwrap_or_else(|| raw.id.trim().to_string()),
         description: raw.description.clone().unwrap_or_default(),
-        spritesheet: format!("data:image/webp;base64,{}", base64_encode(spritesheet_bytes)),
+        spritesheet: format!(
+            "data:image/webp;base64,{}",
+            base64_encode(spritesheet_bytes)
+        ),
         idle,
         talk,
         actions,
@@ -308,7 +329,8 @@ pub async fn import_pet(
                     .read_to_string(&mut content)
                     .map_err(|e| format!("pet.json 读取失败: {e}"))?;
                 raw_json = Some(
-                    serde_json::from_str(&content).map_err(|e| format!("pet.json 解析失败: {e}"))?,
+                    serde_json::from_str(&content)
+                        .map_err(|e| format!("pet.json 解析失败: {e}"))?,
                 );
                 break;
             }
@@ -335,7 +357,9 @@ pub async fn import_pet(
         let mut webp_bytes: Option<Vec<u8>> = None;
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i).map_err(|e| format!("zip 读取失败: {e}"))?;
-            let Some(rel) = entry.enclosed_name() else { continue };
+            let Some(rel) = entry.enclosed_name() else {
+                continue;
+            };
             let lower = rel.to_string_lossy().to_lowercase();
             let out = target_dir.join(&rel);
             if entry.is_dir() {
@@ -364,8 +388,8 @@ pub async fn import_pet(
     // 导入成功：通知主进程重建托盘菜单（切换宠物子菜单反映新宠物）
     let _ = app_for_emit.emit("pet-pets-changed", ());
 
-    // 返回构建好的宠物定义
-    Ok(def?)
+    // 返回构建好的宠物定义（def 已是 Result<PetDefJson, String>，与本函数签名一致）
+    def
 }
 
 /// 同步扫描 app_data_dir/pets/，返回已导入宠物的 (id, displayName) 列表。
@@ -410,7 +434,11 @@ pub async fn delete_imported_pet(app: tauri::AppHandle, id: String) -> Result<()
         .join("pets");
 
     // id 白名单校验（防目录穿越）
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Err("宠物 id 含非法字符".into());
     }
     let app_for_emit = app.clone();
@@ -441,7 +469,11 @@ pub async fn update_imported_pet(
     description: Option<String>,
 ) -> Result<(), String> {
     // id 白名单校验（防目录穿越）
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Err("宠物 id 含非法字符".into());
     }
 
@@ -457,21 +489,27 @@ pub async fn update_imported_pet(
         if !json_path.exists() {
             return Err(format!("宠物不存在: {}", id));
         }
-        let raw = std::fs::read_to_string(&json_path).map_err(|e| format!("读取宠物配置失败: {e}"))?;
+        let raw =
+            std::fs::read_to_string(&json_path).map_err(|e| format!("读取宠物配置失败: {e}"))?;
         let mut pet: serde_json::Value =
             serde_json::from_str(&raw).map_err(|e| format!("解析宠物配置失败: {}", e))?;
 
         if let Some(name) = display_name {
             let name = name.trim().to_string();
             // 空名字回退为原 displayName，避免清空
-            let fallback = pet["displayName"].as_str().unwrap_or("外部宠物").to_string();
-            pet["displayName"] = serde_json::Value::String(if name.is_empty() { fallback } else { name });
+            let fallback = pet["displayName"]
+                .as_str()
+                .unwrap_or("外部宠物")
+                .to_string();
+            pet["displayName"] =
+                serde_json::Value::String(if name.is_empty() { fallback } else { name });
         }
         if let Some(desc) = description {
             pet["description"] = serde_json::Value::String(desc.trim().to_string());
         }
 
-        let new_raw = serde_json::to_string_pretty(&pet).map_err(|e| format!("序列化失败: {}", e))?;
+        let new_raw =
+            serde_json::to_string_pretty(&pet).map_err(|e| format!("序列化失败: {}", e))?;
         std::fs::write(&json_path, new_raw).map_err(|e| format!("写入宠物配置失败: {}", e))?;
         Ok(())
     })
@@ -520,9 +558,16 @@ pub async fn list_imported_pets(app: tauri::AppHandle) -> Result<Vec<PetDefJson>
                 .into_iter()
                 .flatten()
                 .flatten()
-                .find(|e| e.path().extension().map(|x| x.to_string_lossy().to_lowercase()) == Some("webp".into()));
+                .find(|e| {
+                    e.path()
+                        .extension()
+                        .map(|x| x.to_string_lossy().to_lowercase())
+                        == Some("webp".into())
+                });
             let Some(webp_entry) = webp else { continue };
-            let Ok(webp_bytes) = std::fs::read(&webp_entry.path()) else { continue };
+            let Ok(webp_bytes) = std::fs::read(webp_entry.path()) else {
+                continue;
+            };
             result.push(build_pet_def(&raw, &webp_bytes));
         }
         Ok(result)
@@ -682,8 +727,8 @@ pub async fn download_online_pet(
         .await
         .map_err(|e| format!("读取精灵图字节失败: {e}"))?;
 
-    let raw: RawPetJson = serde_json::from_str(&json_text)
-        .map_err(|e| format!("pet.json 解析失败: {e}"))?;
+    let raw: RawPetJson =
+        serde_json::from_str(&json_text).map_err(|e| format!("pet.json 解析失败: {e}"))?;
 
     // 用 slug 作为本地 id（保证唯一，避免与远程 id 命名冲突）
     let mut raw = raw;

@@ -10,9 +10,11 @@ export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in
 export function currentWindowLabel(): string {
   if (typeof window === 'undefined') return 'main'
   try {
-    const internals = (window as unknown as {
-      __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } }
-    }).__TAURI_INTERNALS__
+    const internals = (
+      window as unknown as {
+        __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } }
+      }
+    ).__TAURI_INTERNALS__
     return internals?.metadata?.currentWindow?.label ?? 'main'
   } catch {
     return 'main'
@@ -36,7 +38,7 @@ export async function preloadTauri(): Promise<void> {
 }
 
 /** 同步拿到 invoke（若已预加载则直接用，避免动态 import 延迟） */
-async function getInvoke(): Promise<typeof import('@tauri-apps/api/core')['invoke']> {
+async function getInvoke(): Promise<(typeof import('@tauri-apps/api/core'))['invoke']> {
   if (coreApi) return coreApi.invoke
   const core = await import('@tauri-apps/api/core')
   coreApi = core
@@ -67,9 +69,7 @@ export async function onEvent(
 
 /** 监听当前窗口的 Moved 事件（系统级拖拽时高频触发，可用于 debounce 兜底结束拖拽）。
  *  返回取消监听函数。非 Tauri 环境返回空函数。 */
-export async function onWindowMoved(
-  handler: () => void,
-): Promise<() => void> {
+export async function onWindowMoved(handler: () => void): Promise<() => void> {
   if (!isTauri || !windowApi) return () => {}
   try {
     const un = await windowApi.getCurrentWindow().onMoved(() => handler())

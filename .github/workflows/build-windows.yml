@@ -6,13 +6,13 @@ name: Build & Release Windows
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
   workflow_dispatch:
     inputs:
       version:
-        description: "指定版本号 (如 0.1.25)。留空则自动按小版本(patch)自增"
+        description: '指定版本号 (如 0.1.25)。留空则自动按小版本(patch)自增'
         required: false
-        default: ""
+        default: ''
 
 # 发布到 Releases 需要写权限
 permissions:
@@ -106,7 +106,7 @@ jobs:
           projectPath: ./src-tauri
           tagName: v${{ steps.ver.outputs.version }}
           releaseName: PetBuddy v${{ steps.ver.outputs.version }}
-          releaseBody: "See the assets to download PetBuddy for Windows."
+          releaseBody: 'See the assets to download PetBuddy for Windows.'
           releaseDraft: false
           prerelease: false
           # 若想降低 360 误报，优先出安装包（msi/nsis）而非裸 exe；

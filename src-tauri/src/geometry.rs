@@ -17,14 +17,11 @@ pub const MIN_SCALE: f64 = 0.5;
 pub const MAX_SCALE: f64 = 1.3;
 
 /// 把 scale 夹到允许范围。纯函数,便于单测。
+///
+/// 语义与 `f64::clamp` 完全一致（含 NaN：比较恒为 false，原样返回 NaN）。
+/// MIN_SCALE < MAX_SCALE 为常量，故 clamp 的 panic 前提（min > max / min 或 max 为 NaN）不成立。
 pub fn clamp_scale(scale: f64) -> f64 {
-    if scale < MIN_SCALE {
-        MIN_SCALE
-    } else if scale > MAX_SCALE {
-        MAX_SCALE
-    } else {
-        scale
-    }
+    scale.clamp(MIN_SCALE, MAX_SCALE)
 }
 
 /// 判断点 (px, py) 是否落在任一矩形内(含边界)。

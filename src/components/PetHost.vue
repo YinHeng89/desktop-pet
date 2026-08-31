@@ -1,7 +1,27 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
-import { isTauri, onEvent, updateInteractiveRects, setPetHitRects, applyPetHitRects, startDragging, showPetWindow, hidePetWindow, resizePetWindow, onWindowMoved } from '../tauri'
-import { petStore, currentPet, openPetPicker, setPetVisible, setCurrentPet, loadPetManifest, MIN_SCALE, MAX_SCALE } from '../store/pet'
+import {
+  isTauri,
+  onEvent,
+  updateInteractiveRects,
+  setPetHitRects,
+  applyPetHitRects,
+  startDragging,
+  showPetWindow,
+  hidePetWindow,
+  resizePetWindow,
+  onWindowMoved,
+} from '../tauri'
+import {
+  petStore,
+  currentPet,
+  openPetPicker,
+  setPetVisible,
+  setCurrentPet,
+  loadPetManifest,
+  MIN_SCALE,
+  MAX_SCALE,
+} from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
 import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
 import SpritePet from './SpritePet.vue'
@@ -481,7 +501,13 @@ function onGlobalMouseUp(): void {
 // 立即做一次粗略上报保交互，动画真正结束后（transitionend 或 340ms 兜底）
 // 再做一次权威上报去纠正。
 watch(
-  () => [currentNotify.value?.id, chatText.value, petStore.scale, petStore.visible, currentPet.value?.id],
+  () => [
+    currentNotify.value?.id,
+    chatText.value,
+    petStore.scale,
+    petStore.visible,
+    currentPet.value?.id,
+  ],
   () => {
     void reportInteractiveRectsSettled()
   },
@@ -506,7 +532,9 @@ watch(
 onMounted(async () => {
   // 接收外部通知（Rust HTTP 服务 → notify-push 事件）
   if (isTauri) {
-    onEvent('notify-push', (payload) => enqueueNotify(payload as { text?: string; action?: string; duration?: number }))
+    onEvent('notify-push', (payload) =>
+      enqueueNotify(payload as { text?: string; action?: string; duration?: number }),
+    )
     // 托盘菜单切换宠物 / 打开设置
     onEvent('pet-switch', async (payload) => {
       const id = String(payload)
@@ -606,7 +634,12 @@ onUnmounted(() => {
     class="pet-host"
     :style="{ '--pet-scale': petStore.scale, '--pet-w': petWidthCss, '--tail-right': tailRightCss }"
   >
-    <Transition name="bubble" mode="out-in" @leave="onBubbleLeave" @after-leave="onBubbleAfterLeave">
+    <Transition
+      name="bubble"
+      mode="out-in"
+      @leave="onBubbleLeave"
+      @after-leave="onBubbleAfterLeave"
+    >
       <div
         v-if="currentNotify"
         :key="currentNotify.id"
@@ -615,10 +648,17 @@ onUnmounted(() => {
         @mousedown="onPetMouseDown"
         @transitionend="onBubbleTransitionEnd"
       >
-        <div class="bubble-scroll"><span class="bubble-text">{{ currentNotify.text }}</span></div>
+        <div class="bubble-scroll">
+          <span class="bubble-text">{{ currentNotify.text }}</span>
+        </div>
       </div>
     </Transition>
-    <Transition name="bubble" mode="out-in" @leave="onBubbleLeave" @after-leave="onBubbleAfterLeave">
+    <Transition
+      name="bubble"
+      mode="out-in"
+      @leave="onBubbleLeave"
+      @after-leave="onBubbleAfterLeave"
+    >
       <div
         v-if="chatText && !currentNotify"
         ref="bubbleEl"
@@ -760,5 +800,4 @@ onUnmounted(() => {
   transform: translateX(var(--bubble-x)) translateY(6px) scale(0.98);
   opacity: 0;
 }
-
 </style>

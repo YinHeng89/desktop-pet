@@ -46,9 +46,15 @@ static RECTS_DIRTY: Mutex<bool> = Mutex::new(true);
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSPoint;
 #[cfg(target_os = "macos")]
-static LAST_MOUSE: Mutex<NSPoint> = Mutex::new(NSPoint { x: f64::MIN, y: f64::MIN });
+static LAST_MOUSE: Mutex<NSPoint> = Mutex::new(NSPoint {
+    x: f64::MIN,
+    y: f64::MIN,
+});
 #[cfg(target_os = "macos")]
-static LAST_FRAME_ORIGIN: Mutex<NSPoint> = Mutex::new(NSPoint { x: f64::MIN, y: f64::MIN });
+static LAST_FRAME_ORIGIN: Mutex<NSPoint> = Mutex::new(NSPoint {
+    x: f64::MIN,
+    y: f64::MIN,
+});
 
 /// 内部：存储可交互矩形（供跨平台统一命令 update_interactive_rects 调用）。
 pub(crate) fn store_interactive_rects(rects: &[Rect]) {
@@ -101,11 +107,11 @@ mod macos_impl {
     use super::hit_interactive;
     use super::rects_initialized;
     use super::{LAST_FRAME_ORIGIN, LAST_MOUSE, RECTS_DIRTY};
-    use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Method, Sel};
-    use objc2::{class, define_class, msg_send, sel, ClassType};
     use core::ffi::c_char;
     use objc2::ffi::{class_getInstanceMethod, class_replaceMethod, method_getTypeEncoding};
-    use objc2_foundation::{NSPoint, NSRect, NSObject};
+    use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Method, Sel};
+    use objc2::{class, define_class, msg_send, sel, ClassType};
+    use objc2_foundation::{NSObject, NSPoint, NSRect};
     use std::sync::Mutex;
     use tauri::{Emitter, Manager};
 
@@ -146,7 +152,6 @@ mod macos_impl {
             Bool::YES
         }
     }
-
 
     // 定义一个 NSObject 子类作为 NSTimer 的 target，带一个 tick 方法。
     define_class!(
@@ -351,7 +356,7 @@ mod macos_impl {
                 let types: *const c_char = {
                     let m: *const Method = class_getInstanceMethod(cls as *const AnyClass, sel);
                     if m.is_null() {
-                        b"c@:\0".as_ptr() as *const c_char
+                        c"c@:".as_ptr()
                     } else {
                         method_getTypeEncoding(m)
                     }

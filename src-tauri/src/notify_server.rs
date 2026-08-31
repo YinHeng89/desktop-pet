@@ -20,7 +20,12 @@ const MAX_LEN: usize = 120;
 /// 前端直接调用：通过 Rust 广播通知给 main 窗口的宠物气泡。
 /// 走 Tauri IPC（invoke），绕过 HTTP/CORS，与 notify_server 广播同一事件名。
 #[tauri::command]
-pub fn push_notify(app: tauri::AppHandle, text: String, action: Option<String>, duration: Option<u64>) -> Result<(), String> {
+pub fn push_notify(
+    app: tauri::AppHandle,
+    text: String,
+    action: Option<String>,
+    duration: Option<u64>,
+) -> Result<(), String> {
     if text.is_empty() {
         return Err("通知文本不能为空".to_string());
     }
@@ -46,9 +51,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// 启动本地通知服务（阻塞，需在独立线程调用）。
@@ -95,7 +98,9 @@ fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> std::io::
                     let mut parts = l.splitn(2, ':');
                     let key = parts.next()?.trim().to_ascii_lowercase();
                     let val = parts.next()?.trim();
-                    (key == "content-length").then(|| val.parse::<usize>().ok()).flatten()
+                    (key == "content-length")
+                        .then(|| val.parse::<usize>().ok())
+                        .flatten()
                 })
                 .unwrap_or(0);
             // header 后的 body 字节数
@@ -140,9 +145,16 @@ fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> std::io::
     };
 
     // 提取字段
-    let text = payload.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let action = payload.get("action").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let duration = payload.get("duration").and_then(|v| v.as_u64()).map(|d| d as u64);
+    let text = payload
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let action = payload
+        .get("action")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let duration = payload.get("duration").and_then(|v| v.as_u64());
 
     if text.is_empty() {
         let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
@@ -153,11 +165,15 @@ fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> std::io::
     // 字数硬限制：超过 MAX_LEN 个字符（中文按 1 字符计）拒绝，返回 JSON 错误提示，
     // 调用方（curl/Python 等）可解析 error 字段拿到原因。
     if text.chars().count() > MAX_LEN {
-        let msg = format!("通知文本超限：最多 {} 字，当前 {} 字", MAX_LEN, text.chars().count());
+        let msg = format!(
+            "通知文本超限：最多 {} 字，当前 {} 字",
+            MAX_LEN,
+            text.chars().count()
+        );
         let body = serde_json::json!({ "ok": false, "error": msg }).to_string();
         let resp = format!(
             "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.as_bytes().len(),
+            body.len(),
             body
         );
         let _ = stream.write_all(resp.as_bytes());

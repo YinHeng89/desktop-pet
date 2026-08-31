@@ -32,7 +32,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: website   # 只把 website/ 作为站点根目录
+          path: website # 只把 website/ 作为站点根目录
 
       - name: Deploy
         id: deployment

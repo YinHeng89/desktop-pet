@@ -187,7 +187,10 @@ onBeforeUnmount(() => {
   <canvas
     ref="canvas"
     class="sprite-pet"
-    :style="{ width: Math.round(frame.width * displayScale) + 'px', height: Math.round(frame.height * displayScale) + 'px' }"
+    :style="{
+      width: Math.round(frame.width * displayScale) + 'px',
+      height: Math.round(frame.height * displayScale) + 'px',
+    }"
   />
 </template>
 
