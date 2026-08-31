@@ -30,6 +30,22 @@ import {
 import { useTauriEvent } from '../composables/useTauriEvent'
 import SpritePet from './SpritePet.vue'
 
+/**
+ * 发一条本地通知，失败仅记日志。
+ *
+ * pushNotify 返回 Promise，后端字数硬限制等错误会 reject。
+ * 本组件里多数调用点是「顺带提示一下」，不需要中断流程，
+ * 直接落一个裸 Promise 会产生未处理的 rejection，故统一走这个包装。
+ *
+ * 注：更彻底的做法是启用 @typescript-eslint/no-floating-promises，
+ * 但该规则需要类型感知 lint，等 tsconfig.eslint.json 落地后再开。
+ */
+function notify(text: string, action?: string): void {
+  pushNotify(text, action).catch((e) => {
+    console.error('[PetSettings] 通知发送失败:', e)
+  })
+}
+
 /** 无边框窗口下屏蔽 webview 默认右键菜单 */
 function onContextMenu(e: Event): void {
   e.preventDefault()
@@ -114,10 +130,10 @@ async function doDelete(p: PetDef): Promise<void> {
   pendingDeleteId.value = null
   try {
     await deleteExternalPet(p.id)
-    pushNotify(`宠物「${p.displayName}」已删除`)
+    notify(`宠物「${p.displayName}」已删除`)
   } catch (e) {
     console.error('[PetSettings] 删除宠物失败:', e)
-    pushNotify('删除失败，请重试')
+    notify('删除失败，请重试')
   }
 }
 
@@ -148,7 +164,7 @@ async function saveEditPet(): Promise<void> {
       displayName: editPetName.value,
       description: editPetDesc.value,
     })
-    pushNotify(`宠物信息已更新`, 'wave')
+    notify(`宠物信息已更新`, 'wave')
     closeEditPet()
   } catch (e) {
     console.error('[PetSettings] 编辑宠物失败:', e)
@@ -332,9 +348,9 @@ async function downloadPet(p: OnlinePetMeta): Promise<void> {
     const pet = registerDownloadedPet(def)
     // 下载成功后自动切换到该宠物（跨窗口广播，main 宠物窗口实时生效）
     setCurrentPet(pet.id)
-    pushNotify(`已下载并切换到宠物「${def.display_name}」`, 'wave')
+    notify(`已下载并切换到宠物「${def.display_name}」`, 'wave')
   } catch (e) {
-    pushNotify(`下载失败：${(e as Error)?.message || e}`)
+    notify(`下载失败：${(e as Error)?.message || e}`)
   } finally {
     downloading.value = { ...downloading.value, [p.slug]: false }
   }
@@ -364,7 +380,7 @@ async function onFileChosen(e: Event): Promise<void> {
     const base64 = arrayBufferToBase64(buf)
     const pet = await importExternalPet(base64)
     setCurrentPet(pet.id)
-    pushNotify(`宠物「${pet.displayName}」导入成功！`, 'wave')
+    notify(`宠物「${pet.displayName}」导入成功！`, 'wave')
   } catch (err) {
     importError.value = err instanceof Error ? err.message : String(err)
   } finally {
