@@ -24,6 +24,7 @@ use crate::domain::gallery::index::{
 use crate::domain::pet::codec::base64_decode;
 use crate::domain::pet::model::{build_pet_def, PetDefJson, RawPetJson};
 use crate::domain::pet::validator::safe_join;
+use crate::infra::http_client::http_client;
 
 /// 外部宠物导入命令：解压 zip 到 app_data_dir/pets/<id>/，返回宠物定义。
 #[tauri::command]
@@ -288,37 +289,6 @@ pub async fn list_imported_pets(app: tauri::AppHandle) -> Result<Vec<PetDefJson>
 // 在线画廊：接入 awesome-codex-pet（GitHub raw 为权威源，codexpet.top 仅预览图）
 // ─────────────────────────────────────────────────────────────
 
-/// 建连超时。
-const HTTP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-/// 单次请求总超时。
-///
-/// 必须设置：`reqwest` 默认**没有**超时，网络挂起时 Promise 永不 resolve，
-/// 前端画廊会一直卡在 loading，用户只能杀进程。
-const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-
-/// 共享的 HTTP 客户端（连接复用）。
-static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-
-/// 获取共享 HTTP 客户端：统一 UA 与超时，并复用连接池。
-///
-/// 用 OnceLock 而非每次新建，避免每次浏览/下载都重建 TLS 上下文与连接池。
-fn http_client() -> Result<&'static reqwest::Client, String> {
-    if let Some(c) = HTTP_CLIENT.get() {
-        return Ok(c);
-    }
-    let client = reqwest::Client::builder()
-        .user_agent("PetBuddy/0.1 (online-gallery)")
-        .connect_timeout(HTTP_CONNECT_TIMEOUT)
-        .timeout(HTTP_TIMEOUT)
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
-    // 并发下可能已被其它线程写入；插入失败无害，取已有值即可
-    let _ = HTTP_CLIENT.set(client);
-    HTTP_CLIENT
-        .get()
-        .ok_or_else(|| "HTTP 客户端未初始化".to_string())
-}
-
 /// 浏览在线宠物：拉取 awesome-codex-pet 的 pets.json 索引并返回列表。
 #[tauri::command]
 pub async fn browse_online_pets() -> Result<Vec<OnlinePetMeta>, String> {
@@ -527,16 +497,5 @@ mod tests {
         let raw: RawPetJson = serde_json::from_str(&out).unwrap();
         let pets_root = std::path::Path::new("/tmp/pets");
         assert_eq!(pets_root.join(&raw.id), pets_root.join(slug));
-    }
-
-    // ── http_client ──
-
-    #[test]
-    fn http_client_is_reused_across_calls() {
-        // 验证 OnceLock 生效：不是每次调用都新建客户端（否则连接池形同虚设）。
-        // 超时配置无法从 reqwest::Client 读回断言，故只验证复用这一条可观测性质。
-        let a = http_client().unwrap();
-        let b = http_client().unwrap();
-        assert!(std::ptr::eq(a, b));
     }
 }

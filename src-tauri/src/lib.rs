@@ -7,6 +7,7 @@
 pub mod autostart;
 pub mod domain;
 pub mod error;
+pub mod infra;
 pub mod interactive;
 pub mod macos_pet;
 pub mod notify_server;
