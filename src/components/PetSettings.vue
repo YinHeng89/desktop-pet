@@ -761,7 +761,7 @@ curl -X POST http://127.0.0.1:8756/notify \
             </div>
             <div class="s-tips-note">
               提示：宠物需处于「显示」状态才能看到气泡；气泡默认 4
-              秒后自动消失，多条通知会依次排队播放。
+              秒后自动消失。
             </div>
           </div>
         </div>
