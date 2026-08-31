@@ -365,7 +365,7 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 - [x] **1.2** 🧪 **P0-2 修 `download_online_pet` 目录名与 id 不一致**
   - 强制 `raw.id = slug.clone()`（或目录名改从 `raw.id` 派生并走同一白名单校验）
   - **回归用例**：构造 `pet.json` 中 `id != slug` 的远端响应 → 下载 → 删除 → 断言目录确实被删除
-- [ ] **1.3** 🧪 **P0-3 通知服务安全加固**（详见 Phase 4.2，可提前）
+- [x] **1.3** 🧪 **P0-3 通知服务安全加固**（详见 Phase 4.2，可提前）
   - 立即版：Host 头校验 + `Content-Length` 上限 8KB + 总超时 10s
 - [x] **1.4** 🧪 **P0-4 `duration` 参数端到端生效**
   - `NotifyItem` 增加 `duration?: number`；`showNotify` 用 `item.duration ?? DEFAULT_BUBBLE_MS`
@@ -439,6 +439,27 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 > 新增 4 条 composable 回归用例。
 >
 > **当前测试规模**：前端 21 passed（4 个 spec 文件）/ Rust 11 passed。
+
+> ### 追加完成：1.3（P0-3 通知服务安全加固）
+>
+> `notify_server.rs` 重写，补上五道护栏，并把校验逻辑全部做成**纯函数**以便单测：
+>
+> | 防护                       | 实现                                                                                   | 常量                     |
+> | -------------------------- | -------------------------------------------------------------------------------------- | ------------------------ |
+> | DNS-rebinding / 浏览器跨站 | `Host` 头白名单（仅 `127.0.0.1` / `localhost` / `::1`，端口不参与比较）→ 403           | —                        |
+> | 请求体过大                 | `Content-Length` 超限 → 413（在读 body **之前**判定）                                  | `MAX_BODY_BYTES = 8KB`   |
+> | 请求头过大                 | header 未收完即超限 → 431                                                              | `MAX_HEADER_BYTES = 8KB` |
+> | 慢速攻击                   | 单连接总截止时间（原 `set_read_timeout` 只约束单次 read，可被 1 字节/次无限续期）→ 408 | `TOTAL_TIMEOUT = 10s`    |
+> | 连接打满                   | 并发计数 + Drop 守卫（panic 也不会漏减）→ 超限直接关闭                                 | `MAX_CONNECTIONS = 32`   |
+>
+> 另修一处可观测性缺陷：端口被占用时原本只 `eprintln!`，
+> 用户只看到「通知发不出去」却不知原因；现改为 `emit("notify-server-error")`。
+>
+> 新增 13 条 Rust 单测（`notify_server::tests`），含 `127.0.0.1.evil.com`
+> 这类「形似回环实为外部域名」的负例。
+> README 补充错误响应码表与安全边界说明。
+>
+> **当前测试规模**：前端 21 passed / Rust 24 passed。
 
 **✅ Phase 1 验收**：功能基线 A/B/C/D/E 全量回归通过；P0 五项全部关闭；新增 ≥20 个回归测试。
 

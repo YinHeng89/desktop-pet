@@ -8,14 +8,55 @@
 //!
 //! 用标准库 TcpListener 手写极简 HTTP（只解析 POST /notify 的 JSON body），
 //! 避免引入额外依赖。
+//!
+//! # 安全边界
+//!
+//! 本服务暴露在本机端口上，**任何能访问该端口的程序都能让宠物说话**，
+//! 因此必须防住两类典型攻击：
+//!
+//! 1. **浏览器发起的跨站请求 / DNS-rebinding**：任意网页都能对
+//!    `http://127.0.0.1:8756/notify` 发 `POST`（用 `Content-Type: text/plain`
+//!    即为 CORS 简单请求，无预检）。故必须校验 `Host` 头只接受回环地址。
+//! 2. **资源耗尽**：`Content-Length` 可声明任意大值，慢速攻击可持续占用连接。
+//!    故必须限制 body 大小、header 大小、单连接总耗时与并发连接数。
+//!
+//! 上述校验全部实现为纯函数（输入 `&str` → 输出 `bool`/`Option`），
+//! 便于在本文件末尾的 `tests` 模块中直接单测。
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 const PORT: u16 = 8756;
 /// 通知文本字数硬上限（中文按 1 字符计），超出拒绝并返回错误提示。
 const MAX_LEN: usize = 120;
+
+/// 请求头大小上限。超过直接拒绝，避免无 \r\n\r\n 结尾的数据把内存吃满。
+const MAX_HEADER_BYTES: usize = 8 * 1024;
+/// 请求体大小上限。本服务只需要收一条几十字节的 JSON，8KB 绰绰有余。
+const MAX_BODY_BYTES: usize = 8 * 1024;
+/// 单次 read 的超时。
+const READ_TIMEOUT: Duration = Duration::from_secs(3);
+/// 单连接总耗时上限。
+///
+/// 注意：`set_read_timeout` 只约束**单次** read，攻击者每次只发 1 字节
+/// 就能无限续期，因此必须另设一个总的截止时间（慢速攻击防护）。
+const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+/// 并发连接上限。超出后新连接直接关闭，避免被打满线程池。
+const MAX_CONNECTIONS: usize = 32;
+
+/// 当前活跃连接数（配合 MAX_CONNECTIONS 使用）。
+static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// 连接计数守卫：Drop 时自动递减，避免线程 panic 导致计数只增不减。
+struct ConnectionGuard;
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 /// 前端直接调用：通过 Rust 广播通知给 main 窗口的宠物气泡。
 /// 走 Tauri IPC（invoke），绕过 HTTP/CORS，与 notify_server 广播同一事件名。
@@ -46,6 +87,10 @@ pub fn push_notify(
     Ok(())
 }
 
+// ─────────────────────────────────────────────────────────────
+// 纯函数区：不碰 IO，便于单测
+// ─────────────────────────────────────────────────────────────
+
 /// 在 haystack 中查找 needle 子切片，返回起始偏移（找不到返回 None）。
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
@@ -54,60 +99,193 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
+/// 从请求头文本中取出指定字段的值（字段名大小写不敏感），找不到返回 None。
+///
+/// 传入的文本可以包含请求行——请求行不含 `:`，自然不会被误匹配。
+fn header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
+    let want = name.to_ascii_lowercase();
+    headers.lines().find_map(|line| {
+        let (key, val) = line.split_once(':')?;
+        if key.trim().to_ascii_lowercase() == want {
+            Some(val.trim())
+        } else {
+            None
+        }
+    })
+}
+
+/// 解析 Content-Length。缺失返回 None（等价于 0），值非法返回 None。
+fn content_length(headers: &str) -> Option<usize> {
+    header_value(headers, "content-length")?
+        .parse::<usize>()
+        .ok()
+}
+
+/// 校验 Host 头是否指向本机回环地址。
+///
+/// 这是防 DNS-rebinding 与浏览器跨站请求的关键一道关口：
+/// 任意网页都能对 127.0.0.1 发简单请求，若不校验 Host，
+/// 用户浏览恶意页面时宠物就会被随意操纵。
+///
+/// - HTTP/1.1 请求必带 Host，缺失即视为不合法
+/// - 端口不参与比较（允许任意端口，便于测试与反向代理场景）
+/// - IPv6 字面量的 `[::1]:8756` 形式需单独拆解
+fn is_allowed_host(host: Option<&str>) -> bool {
+    let Some(host) = host else { return false };
+    let host = host.trim();
+    if host.is_empty() {
+        return false;
+    }
+    let hostname = if let Some(rest) = host.strip_prefix('[') {
+        // IPv6 字面量：[::1] 或 [::1]:8756
+        match rest.split_once(']') {
+            Some((addr, _port)) => addr,
+            None => return false,
+        }
+    } else {
+        host.split_once(':').map(|(h, _port)| h).unwrap_or(host)
+    };
+    matches!(
+        hostname.to_ascii_lowercase().as_str(),
+        "127.0.0.1" | "localhost" | "::1"
+    )
+}
+
+// ─────────────────────────────────────────────────────────────
+
+/// 写回一个无 body 的响应。
+fn write_status(stream: &mut std::net::TcpStream, status: &str) -> io::Result<()> {
+    stream.write_all(
+        format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
+    )
+}
+
+/// 写回一个 JSON 响应。
+fn write_json(stream: &mut std::net::TcpStream, status: &str, body: &str) -> io::Result<()> {
+    stream.write_all(
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .as_bytes(),
+    )
+}
+
 /// 启动本地通知服务（阻塞，需在独立线程调用）。
 pub fn start(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let listener = match TcpListener::bind(("127.0.0.1", PORT)) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("[notify-server] 绑定端口 {} 失败: {e}", PORT);
+                eprintln!("[notify-server] 绑定端口 {PORT} 失败: {e}");
+                // 上报前端：端口被占用时用户此前完全无感知，
+                // 只会表现为「通知发不出去」却不知道原因。
+                let _ = app.emit(
+                    "notify-server-error",
+                    serde_json::json!({ "port": PORT, "error": e.to_string() }),
+                );
                 return;
             }
         };
-        println!("[notify-server] 已监听 http://127.0.0.1:{}/notify", PORT);
+        println!("[notify-server] 已监听 http://127.0.0.1:{PORT}/notify");
 
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
+
+            // 并发上限：超出直接关闭新连接。
+            // fetch_add 返回的是自增前的值，故用 >= 判断。
+            if ACTIVE_CONNECTIONS.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+                ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
+                continue;
+            }
+
             let app = app.clone();
             std::thread::spawn(move || {
+                let _guard = ConnectionGuard;
                 let _ = handle(&mut stream, &app);
             });
         }
     });
 }
 
-fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> std::io::Result<()> {
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
+/// 处理单个连接。
+///
+/// 读取顺序刻意安排为「边读边卡上限」，而不是先读满再校验：
+///   1. 每次 read 后检查总截止时间（慢速攻击）
+///   2. header 未收完但已超 MAX_HEADER_BYTES → 431
+///   3. header 收完后立即校验 Host（403）与 Content-Length（413）
+///   4. 之后才按声明长度继续读 body，且总字节数不超过 header+body 上限
+fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> io::Result<()> {
+    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    let deadline = Instant::now() + TOTAL_TIMEOUT;
 
-    // 循环读取直到读到完整的请求（header + body）。
-    // 单次 read 可能只读到 header 或部分 body（TCP 分段），需按 Content-Length 补齐。
+    // ── 1) 读取请求头 ──
     let mut data: Vec<u8> = Vec::new();
     let mut buf = [0u8; 8192];
-    loop {
-        let n = stream.read(&mut buf)?;
-        if n == 0 {
-            break; // 对端关闭
+    let header_end = loop {
+        if Instant::now() >= deadline {
+            return write_status(stream, "408 Request Timeout");
         }
-        data.extend_from_slice(&buf[..n]);
-        // 已收到完整 header？
-        if let Some(header_end) = find_subslice(&data, b"\r\n\r\n") {
-            let header = String::from_utf8_lossy(&data[..header_end]).to_string();
-            let content_len = header
-                .lines()
-                .find_map(|l| {
-                    let mut parts = l.splitn(2, ':');
-                    let key = parts.next()?.trim().to_ascii_lowercase();
-                    let val = parts.next()?.trim();
-                    (key == "content-length")
-                        .then(|| val.parse::<usize>().ok())
-                        .flatten()
-                })
-                .unwrap_or(0);
-            // header 后的 body 字节数
-            let body_start = header_end + 4;
-            if data.len() >= body_start + content_len {
-                break; // body 读完整了
+        match stream.read(&mut buf) {
+            Ok(0) => return Ok(()), // 对端关闭
+            Ok(n) => {
+                // 硬上限：header 阶段不允许累积超过 MAX_HEADER_BYTES + MAX_BODY_BYTES。
+                // （此时尚不知道 body 长度，先按两者之和兜底。）
+                if data.len() + n > MAX_HEADER_BYTES + MAX_BODY_BYTES {
+                    return write_status(stream, "413 Payload Too Large");
+                }
+                data.extend_from_slice(&buf[..n]);
+                if let Some(i) = find_subslice(&data, b"\r\n\r\n") {
+                    if i > MAX_HEADER_BYTES {
+                        return write_status(stream, "431 Request Header Fields Too Large");
+                    }
+                    break i;
+                }
             }
+            // set_read_timeout 触发时返回 WouldBlock / TimedOut
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                return write_status(stream, "408 Request Timeout")
+            }
+            Err(e) => return Err(e),
+        }
+    };
+
+    let header_text = String::from_utf8_lossy(&data[..header_end]).to_string();
+
+    // ── 2) 安全校验：Host（防 DNS-rebinding / 浏览器跨站）──
+    if !is_allowed_host(header_value(&header_text, "host")) {
+        return write_status(stream, "403 Forbidden");
+    }
+
+    // ── 3) 安全校验：body 大小 ──
+    let content_len = content_length(&header_text).unwrap_or(0);
+    if content_len > MAX_BODY_BYTES {
+        return write_status(stream, "413 Payload Too Large");
+    }
+
+    // ── 4) 按 Content-Length 补齐 body ──
+    let body_start = header_end + 4;
+    while data.len() < body_start + content_len {
+        if Instant::now() >= deadline {
+            return write_status(stream, "408 Request Timeout");
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => break, // 对端提前关闭
+            Ok(n) => {
+                if data.len() + n > MAX_HEADER_BYTES + MAX_BODY_BYTES {
+                    return write_status(stream, "413 Payload Too Large");
+                }
+                data.extend_from_slice(&buf[..n]);
+            }
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                return write_status(stream, "408 Request Timeout")
+            }
+            Err(e) => return Err(e),
         }
     }
 
@@ -115,33 +293,22 @@ fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> std::io::
 
     // 解析请求行
     let request_line = req.lines().next().unwrap_or("");
-    let mut method = "";
-    let mut path = "";
-    if let Some(first) = request_line.split(' ').next() {
-        method = first;
-    }
-    if let Some(second) = request_line.split(' ').nth(1) {
-        path = second;
-    }
+    let mut parts = request_line.split(' ');
+    let method = parts.next().unwrap_or("");
+    let path = parts.next().unwrap_or("");
 
     // 只有 POST /notify 才处理，其余返回 404
     if method != "POST" || path != "/notify" {
-        let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-        let _ = stream.write_all(resp.as_bytes());
-        return Ok(());
+        return write_status(stream, "404 Not Found");
     }
 
     // 提取 body（\r\n\r\n 之后）
-    let body = req.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    let body = req.split("\r\n\r\n").nth(1).unwrap_or("");
 
     // 解析 JSON
-    let payload: serde_json::Value = match serde_json::from_str(&body) {
+    let payload: serde_json::Value = match serde_json::from_str(body) {
         Ok(v) => v,
-        Err(_) => {
-            let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            let _ = stream.write_all(resp.as_bytes());
-            return Ok(());
-        }
+        Err(_) => return write_status(stream, "400 Bad Request"),
     };
 
     // 提取字段
@@ -157,27 +324,22 @@ fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> std::io::
     let duration = payload.get("duration").and_then(|v| v.as_u64());
 
     if text.is_empty() {
-        let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-        let _ = stream.write_all(resp.as_bytes());
-        return Ok(());
+        return write_status(stream, "400 Bad Request");
     }
 
     // 字数硬限制：超过 MAX_LEN 个字符（中文按 1 字符计）拒绝，返回 JSON 错误提示，
     // 调用方（curl/Python 等）可解析 error 字段拿到原因。
     if text.chars().count() > MAX_LEN {
-        let msg = format!(
-            "通知文本超限：最多 {} 字，当前 {} 字",
-            MAX_LEN,
-            text.chars().count()
-        );
-        let body = serde_json::json!({ "ok": false, "error": msg }).to_string();
-        let resp = format!(
-            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-        return Ok(());
+        let body = serde_json::json!({
+            "ok": false,
+            "error": format!(
+                "通知文本超限：最多 {} 字，当前 {} 字",
+                MAX_LEN,
+                text.chars().count()
+            ),
+        })
+        .to_string();
+        return write_json(stream, "400 Bad Request", &body);
     }
 
     // 广播给前端
@@ -188,7 +350,119 @@ fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> std::io::
     });
     let _ = app.emit("notify-push", emit_payload);
 
-    let resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
-    let _ = stream.write_all(resp.as_bytes());
-    Ok(())
+    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── find_subslice ──
+
+    #[test]
+    fn find_subslice_basic() {
+        assert_eq!(find_subslice(b"abc\r\n\r\ndef", b"\r\n\r\n"), Some(3));
+        assert_eq!(find_subslice(b"nope", b"\r\n\r\n"), None);
+        assert_eq!(find_subslice(b"ab", b"abcd"), None);
+    }
+
+    #[test]
+    fn find_subslice_empty_needle_returns_none() {
+        assert_eq!(find_subslice(b"abc", b""), None);
+    }
+
+    // ── header_value ──
+
+    #[test]
+    fn header_value_is_case_insensitive() {
+        let h = "POST /notify HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 12";
+        assert_eq!(header_value(h, "host"), Some("127.0.0.1"));
+        assert_eq!(header_value(h, "HOST"), Some("127.0.0.1"));
+        assert_eq!(header_value(h, "Content-LENGTH"), Some("12"));
+    }
+
+    #[test]
+    fn header_value_missing_returns_none() {
+        let h = "POST /notify HTTP/1.1\r\nHost: 127.0.0.1";
+        assert_eq!(header_value(h, "x-custom"), None);
+    }
+
+    #[test]
+    fn header_value_keeps_colon_in_value() {
+        // IPv6 的 Host 值本身含冒号，只能用 split_once 取第一段
+        let h = "POST /notify HTTP/1.1\r\nHost: [::1]:8756";
+        assert_eq!(header_value(h, "host"), Some("[::1]:8756"));
+    }
+
+    #[test]
+    fn header_value_request_line_is_not_matched() {
+        // 请求行不含冒号，不应被误当成 header
+        let h = "POST /notify HTTP/1.1\r\nHost: localhost";
+        assert_eq!(header_value(h, "post /notify http/1.1"), None);
+    }
+
+    // ── content_length ──
+
+    #[test]
+    fn content_length_parsed() {
+        let h = "POST /notify HTTP/1.1\r\nContent-Length: 42";
+        assert_eq!(content_length(h), Some(42));
+    }
+
+    #[test]
+    fn content_length_missing_or_invalid_is_none() {
+        let h = "POST /notify HTTP/1.1\r\nHost: localhost";
+        assert_eq!(content_length(h), None);
+        assert_eq!(content_length("Content-Length: abc"), None);
+        assert_eq!(content_length("Content-Length: -1"), None);
+    }
+
+    // ── is_allowed_host：DNS-rebinding / 跨站请求防护的核心 ──
+
+    #[test]
+    fn allows_loopback_hosts() {
+        for h in [
+            "127.0.0.1",
+            "127.0.0.1:8756",
+            "localhost",
+            "localhost:8756",
+            "[::1]",
+            "[::1]:8756",
+        ] {
+            assert!(is_allowed_host(Some(h)), "应允许: {h}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_loopback_hosts() {
+        for h in [
+            "evil.com",
+            "127.0.0.1.evil.com", // 形似回环实为外部域名
+            "192.168.1.5",
+            "0.0.0.0",
+            "[::2]",
+            "",
+            "   ",
+        ] {
+            assert!(!is_allowed_host(Some(h)), "应拒绝: {h:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_missing_host() {
+        // HTTP/1.1 请求必带 Host；缺失即视为不合法（而非放行）
+        assert!(!is_allowed_host(None));
+    }
+
+    #[test]
+    fn host_comparison_ignores_case() {
+        assert!(is_allowed_host(Some("LOCALHOST")));
+        assert!(is_allowed_host(Some("LocalHost:8756")));
+    }
+
+    #[test]
+    fn rejects_malformed_ipv6_literal() {
+        // 有 '[' 但没有 ']' → 解析失败，应拒绝而非放行
+        assert!(!is_allowed_host(Some("[::1")));
+    }
 }
