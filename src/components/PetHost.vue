@@ -22,7 +22,7 @@ import {
   MAX_SCALE,
 } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
-import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../pets/dialogues'
+import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../features/pet/model/dialogues'
 import SpritePet from './SpritePet.vue'
 
 // macOS 判断：macOS 由原生层（macos_pet.rs 的 NSTimer）驱动 hover/drag，

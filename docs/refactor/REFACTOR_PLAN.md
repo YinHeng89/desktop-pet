@@ -699,12 +699,12 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 
 **目标**：把 `PetHost.vue` 里的状态机、队列、几何计算全部抽成**不依赖 Vue 的纯函数**，然后 100% 单测。
 
-- [ ] **6.1** ★ `features/pet/model/frame.ts`
+- [x] **6.1** ★ `features/pet/model/frame.ts`
   - `seqFor(pet, state) -> FrameSeq | null`（从 `SpritePet.vue:40`）
   - `frameBounds(imgW, imgH, frame) -> {rows, cols}`（从 `SpritePet.vue:65-66`）
   - `isFrameInBounds(row, col, bounds) -> boolean`
   - 🧪 补：越界返回 false（不清空画布）；9 行图访问 row 10 → 越界；非标准 cols
-- [ ] **6.2** ★★ `features/pet/model/actionScheduler.ts`（纯 reducer）
+- [x] **6.2** ★★ `features/pet/model/actionScheduler.ts`（纯 reducer）
   ```ts
   type ActionState = { current: string; isPlaying: boolean }
   type ActionEvent =
@@ -717,12 +717,12 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
   - 从 `PetHost.vue` 抽出：`playAction` / `playRandomAction` / `scheduleRandomAction` / `RANDOM_POOL` / hover 的 waiting 逻辑
   - **修复现有隐患**：三个 timer（action/random/chat）互相 clear 的风险由状态机统一消除
   - 🧪 补：talk 优先级最高；随机池过滤不存在的动作；`finish` 后回 idle；rng 注入使测试确定性
-- [ ] **6.3** ★ `features/pet/model/geometry.ts`
+- [x] **6.3** ★ `features/pet/model/geometry.ts`
   - `computeHitRects({petRect, bubbleRect, scale, tokens}) -> Rect[]`
   - `padRect(rect, pad) -> Rect`（从 `PetHost.vue:214-215`，padding 由 tokens 推导而非硬编码）
   - ⚠️ **规则**：`petRect` 不存在但 `bubbleRect` 存在时返回 `[]`（保持现有"整窗可交互"语义）
   - 🧪 补：阴影 padding 随 scale 线性；空宠物时的降级分支（回归启动竞态 bug）
-- [ ] **6.4** ★ `features/notify/model/notifyQueue.ts`
+- [x] **6.4** ★ `features/notify/model/notifyQueue.ts`
   ```ts
   type QueueState = { queue: NotifyItem[]; current: NotifyItem | null }
   function enqueue(state, item): QueueState
@@ -731,13 +731,13 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
   ```
   - 从 `PetHost.vue:99-138`，**修复 P0-4**
   - 🧪 补：FIFO 顺序；`action` 非空时先播动作；空 text 不入队；duration 透传
-- [ ] **6.5** `features/gallery/model/filter.ts`（从 `PetSettings.vue:248-257`）
+- [x] **6.5** `features/gallery/model/filter.ts`（从 `PetSettings.vue:248-257`）
   - 🧪 补：名字/作者/分类三字段、大小写不敏感、空关键词返回全部、无匹配返回空
-- [ ] **6.6** `features/pet/model/dialogues.ts`：迁移 `src/pets/dialogues.ts`
+- [x] **6.6** `features/pet/model/dialogues.ts`：迁移 `src/pets/dialogues.ts`
   - 增加 `pickDialogue(petId, action, rng)` 纯函数（从 `PetHost.vue:76-87`）
   - 结构预留 i18n key（暂只填 zh）
   - 🧪 补：内置宠物命中专属台词；外部宠物走通用；动作无台词 → 空串
-- [ ] **6.7** `shared/utils/base64.ts`：迁移 `arrayBufferToBase64`（从 `PetSettings.vue:308`）
+- [x] **6.7** `shared/utils/base64.ts`：迁移 `arrayBufferToBase64`（从 `PetSettings.vue:308`）
   - 🧪 补：>0x8000 分块正确性；空 buffer；单字节
 
 **✅ Phase 6 验收**：`features/**/model/**` 与 `shared/**` 覆盖率 ≥90%；这些文件**零 `import { ref } from 'vue'`**（lint 规则断言）；功能基线 A4/A5/A6/A7/B1~B4 全绿。
