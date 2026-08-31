@@ -616,7 +616,7 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 
 ### Phase 4 Rust：基础设施与安全加固
 
-- [ ] **4.1** ★ `infra/http_client.rs`
+- [x] **4.1** ★ `infra/http_client.rs`
   - `OnceLock<Client>` + `timeout(15s)` + `connect_timeout(5s)` + 统一 UA
   - 提供 trait `HttpClient`（便于测试注入 mock，覆盖 `browse_online_pets` / `download_online_pet`）
 - [ ] **4.2** ★ `infra/http_server.rs` 加固（承接 1.3）
