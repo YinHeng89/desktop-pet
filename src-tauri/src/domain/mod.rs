@@ -7,4 +7,5 @@
 // 验收：`grep -rn "tauri" src/domain/` 必须为空。
 
 pub mod geometry;
+pub mod notify;
 pub mod pet;

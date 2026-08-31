@@ -15,5 +15,7 @@ pub fn update_interactive_rects(rects: Vec<Rect>) {
     crate::macos_pet::store_interactive_rects(&rects);
     #[cfg(target_os = "windows")]
     crate::windows_pet::store_hit_rects(&rects);
-    // 其他平台(Linux 等)目前无局部穿透,no-op。
+    // 其他平台(Linux 等)目前无局部穿透,no-op;引用一次以免未使用告警。
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = &rects;
 }

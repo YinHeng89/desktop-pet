@@ -310,6 +310,7 @@ pub fn apply_hit_rects(hwnd: isize) -> bool {
 /// Linux:暂未实现不规则窗口穿透(需要 X11 XShape/XFixes 或 Wayland layer-shell),
 /// 此时仅打印一次友好提示,宠物窗口退化为普通置顶透明窗口(无局部穿透)。
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[allow(dead_code)]
 pub fn setup_notify_interactive(_app: &tauri::AppHandle) {
     eprintln!(
         "[windows_pet] Linux 暂不支持不规则窗口穿透:宠物窗口将以普通置顶透明窗口显示,\
