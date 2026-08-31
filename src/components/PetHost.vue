@@ -2,7 +2,6 @@
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import {
   isTauri,
-  onEvent,
   updateInteractiveRects,
   setPetHitRects,
   applyPetHitRects,
@@ -12,6 +11,7 @@ import {
   resizePetWindow,
   onWindowMoved,
 } from '../tauri'
+import { useTauriEvent } from '../composables/useTauriEvent'
 import {
   petStore,
   currentPet,
@@ -557,69 +557,82 @@ watch(
   },
 )
 
-onMounted(async () => {
-  // 接收外部通知（Rust HTTP 服务 → notify-push 事件）
-  if (isTauri) {
-    onEvent('notify-push', (payload) =>
-      enqueueNotify(payload as { text?: string; action?: string; duration?: number }),
-    )
-    // 托盘菜单切换宠物 / 打开设置
-    onEvent('pet-switch', async (payload) => {
-      const id = String(payload)
-      if (id === 'pet:more') {
-        openPetPicker()
-        return
-      }
-      const pureId = id.replace(/^pet:/, '')
-      // main 窗口的 petStore.pets 是独立实例：settings 窗口新导入的外部宠物尚未同步到这里。
-      // 若本地找不到该 id，先重载外部宠物列表（含新导入项），再切换。
-      if (!petStore.pets.some((p) => p.id === pureId)) {
-        await loadPetManifest()
-      }
-      // 用 setCurrentPet 而非直接改 currentId：它会同时持久化到 localStorage（重启不丢）
-      // 并广播 pet-switch 到 settings 窗口（设置界面实时同步选中），否则托盘切换只在
-      // main 窗口生效、重启后被 settings 的旧值覆盖。
-      if (petStore.pets.some((p) => p.id === pureId)) setCurrentPet(pureId)
-    })
-    // 设置窗口同步缩放（settings 窗口改缩放 → 实时生效）
-    onEvent('pet-scale', (payload) => {
-      const s = Number(payload)
-      if (Number.isFinite(s) && s >= MIN_SCALE && s <= MAX_SCALE) {
-        petStore.scale = s
-        // 窗口跟随缩放：气泡+宠物一起放大，需同步调整窗口尺寸
-        void resizePetWindow(s)
-      }
-    })
-    // 设置窗口同步显示/隐藏（settings 窗口切换「显示宠物」→ 实时生效）
-    onEvent('pet-visible', (payload) => {
-      petStore.visible = payload !== 'false' && payload !== false
-    })
-    // 托盘：显示/隐藏宠物
-    onEvent('pet-toggle-visible', () => {
-      setPetVisible(!petStore.visible)
-    })
-    // macOS：原生层 hover / drag 桥接（WebView 在 App 非激活时 mouseenter/mousedown 不可靠，
-    // 由 macos_pet.rs 的 NSTimer 命中检测后 emit 事件，前端只负责播放动作/清理状态）。
-    onEvent('pet-hover', (payload) => {
-      const over = Boolean(payload)
-      if (over) onPetEnter()
-      else onPetLeave()
-    })
-    onEvent('pet-drag-start', () => {
-      dragging = true
-      dragMoved = true // 拖拽后紧跟的 click 应被忽略
-    })
-    onEvent('pet-drag', (payload) => {
-      const dir = payload === 'left' ? 'runningLeft' : 'runningRight'
-      if (currentPet.value?.actions?.[dir] && petState.value !== dir) {
-        petState.value = dir
-      }
-    })
-    onEvent('pet-drag-end', () => {
-      onNativeDragEnd()
-    })
-  }
+// ── Rust / 其它窗口发来的事件 ──
+//
+// 统一用 useTauriEvent 注册：它在组件卸载时自动取消监听。
+// 迁移前这里是在 async onMounted 里直接调 onEvent(...)，9 个监听一个都没保存
+// 返回值、onUnmounted 也没清理——组件销毁后监听继续存活。
+//
+// ⚠️ 必须写在 <script setup> 顶层：useTauriEvent 内部要注册 onUnmounted，
+// 一旦越过 await，currentInstance 为 null 就无法与组件实例关联。
+if (isTauri) {
+  // 外部通知（Rust HTTP 服务 → notify-push 事件）
+  useTauriEvent('notify-push', (payload) =>
+    enqueueNotify(payload as { text?: string; action?: string; duration?: number }),
+  )
+  // 托盘菜单切换宠物 / 打开设置
+  useTauriEvent('pet-switch', async (payload) => {
+    const id = String(payload)
+    if (id === 'pet:more') {
+      openPetPicker()
+      return
+    }
+    const pureId = id.replace(/^pet:/, '')
+    // main 窗口的 petStore.pets 是独立实例：settings 窗口新导入的外部宠物尚未同步到这里。
+    // 若本地找不到该 id，先重载外部宠物列表（含新导入项），再切换。
+    if (!petStore.pets.some((p) => p.id === pureId)) {
+      await loadPetManifest()
+    }
+    // 用 setCurrentPet 而非直接改 currentId：它会同时持久化到 localStorage（重启不丢）
+    // 并广播 pet-switch 到 settings 窗口（设置界面实时同步选中），否则托盘切换只在
+    // main 窗口生效、重启后被 settings 的旧值覆盖。
+    if (petStore.pets.some((p) => p.id === pureId)) setCurrentPet(pureId)
+  })
+  // 设置窗口同步缩放（settings 窗口改缩放 → 实时生效）
+  useTauriEvent('pet-scale', (payload) => {
+    const s = Number(payload)
+    if (Number.isFinite(s) && s >= MIN_SCALE && s <= MAX_SCALE) {
+      petStore.scale = s
+      // 窗口跟随缩放：气泡+宠物一起放大，需同步调整窗口尺寸
+      void resizePetWindow(s)
+    }
+  })
+  // 设置窗口同步显示/隐藏（settings 窗口切换「显示宠物」→ 实时生效）
+  useTauriEvent('pet-visible', (payload) => {
+    petStore.visible = payload !== 'false' && payload !== false
+  })
+  // 托盘：显示/隐藏宠物
+  useTauriEvent('pet-toggle-visible', () => {
+    setPetVisible(!petStore.visible)
+  })
+  // macOS：原生层 hover / drag 桥接（WebView 在 App 非激活时 mouseenter/mousedown 不可靠，
+  // 由 macos_pet.rs 的 NSTimer 命中检测后 emit 事件，前端只负责播放动作/清理状态）。
+  useTauriEvent('pet-hover', (payload) => {
+    const over = Boolean(payload)
+    if (over) onPetEnter()
+    else onPetLeave()
+  })
+  useTauriEvent('pet-drag-start', () => {
+    dragging = true
+    dragMoved = true // 拖拽后紧跟的 click 应被忽略
+  })
+  useTauriEvent('pet-drag', (payload) => {
+    const dir = payload === 'left' ? 'runningLeft' : 'runningRight'
+    if (currentPet.value?.actions?.[dir] && petState.value !== dir) {
+      petState.value = dir
+    }
+  })
+  useTauriEvent('pet-drag-end', () => {
+    onNativeDragEnd()
+  })
+}
 
+/** 透明无边框窗口下屏蔽 webview 默认右键菜单 */
+function onContextMenu(e: Event): void {
+  e.preventDefault()
+}
+
+onMounted(async () => {
   scheduleRandomAction()
   // 尽早上报可交互矩形：macOS 穿透用 NSTimer 每 50ms 轮询一次，若矩形未及时上报，
   // 启动瞬间会被误判「鼠标不在宠物上」→ ignoresMouseEvents=true → 穿透。
@@ -628,7 +641,7 @@ onMounted(async () => {
   await nextTick()
   void reportInteractiveRectsSettled()
   // 禁用右键菜单（透明无边框窗口，避免弹出 webview 默认菜单）
-  document.addEventListener('contextmenu', (e) => e.preventDefault())
+  document.addEventListener('contextmenu', onContextMenu)
 
   // 启动时按当前缩放设一次窗口尺寸（窗口跟随缩放）
   if (isTauri) void resizePetWindow(petStore.scale)
@@ -642,6 +655,7 @@ onUnmounted(() => {
   if (settleTimer) clearTimeout(settleTimer)
   if (dragMovedTimer) clearTimeout(dragMovedTimer)
   if (unlistenWindowMoved) unlistenWindowMoved()
+  document.removeEventListener('contextmenu', onContextMenu)
   window.removeEventListener('mouseup', onGlobalMouseUp)
   window.removeEventListener('mousemove', onPetDragMove)
 })

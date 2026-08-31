@@ -25,10 +25,34 @@ import {
   downloadOnlinePet,
   openExternal,
   preloadTauri,
-  onEvent,
   type OnlinePetMeta,
 } from '../tauri'
+import { useTauriEvent } from '../composables/useTauriEvent'
 import SpritePet from './SpritePet.vue'
+
+/** 无边框窗口下屏蔽 webview 默认右键菜单 */
+function onContextMenu(e: Event): void {
+  e.preventDefault()
+}
+
+// ── 跨窗口同步（统一由 useTauriEvent 托管，卸载时自动取消监听）──
+// 必须写在 <script setup> 顶层，不能放进 async 回调的 await 之后
+// （详见 composables/useTauriEvent.ts 的说明）。
+
+// 托盘 / main 窗口切换「显示宠物」后，本设置窗口的开关也实时更新（修复只发不收的失同步）
+useTauriEvent('pet-visible', (payload) => {
+  petStore.visible = payload !== 'false' && payload !== false
+})
+
+// 托盘 / main 窗口切换宠物后，本设置窗口的选中项与预览实时更新。
+// 注意：这里只被动改 currentId 高亮，不能调 setCurrentPet（那会再广播形成回环）；
+// 持久化已由触发方（setCurrentPet）完成，此处仅同步 UI。
+useTauriEvent('pet-switch', (payload) => {
+  const id = String(payload).replace(/^pet:/, '')
+  if (petStore.pets.some((p) => p.id === id)) {
+    petStore.currentId = id
+  }
+})
 
 // settings 窗口是独立 webview，pets 由 App.vue onMounted 异步加载；
 // 此处兜底：挂载时若尚未加载则主动加载，保证列表与预览始终有数据。
@@ -42,26 +66,7 @@ onMounted(() => {
     void loadPetManifest()
   }
   // 禁用右键菜单（避免无边框窗口里弹出 webview 默认菜单）
-  document.addEventListener('contextmenu', (e) => e.preventDefault())
-
-  // 同步：托盘 / main 窗口切换「显示宠物」后，本设置窗口的开关也实时更新（修复只发不收的失同步）
-  onEvent('pet-visible', (payload) => {
-    petStore.visible = payload !== 'false' && payload !== false
-  }).then((u) => {
-    unlistenVisible = u
-  })
-
-  // 同步：托盘 / main 窗口切换宠物后，本设置窗口的选中项与预览实时更新。
-  // 注意：这里只被动改 currentId 高亮，不能调 setCurrentPet（那会再广播形成回环）；
-  // 持久化已由触发方（setCurrentPet）完成，此处仅同步 UI。
-  onEvent('pet-switch', (payload) => {
-    const id = String(payload).replace(/^pet:/, '')
-    if (petStore.pets.some((p) => p.id === id)) {
-      petStore.currentId = id
-    }
-  }).then((u) => {
-    unlistenSwitch = u
-  })
+  document.addEventListener('contextmenu', onContextMenu)
 
   // 左侧底部版本号：读取 Tauri 打包时嵌入的版本（来自 tauri.conf.json）
   getVersion()
@@ -71,17 +76,9 @@ onMounted(() => {
     .catch(() => {})
 })
 
-let unlistenVisible: (() => void) | null = null
-let unlistenSwitch: (() => void) | null = null
 onUnmounted(() => {
-  if (unlistenVisible) {
-    unlistenVisible()
-    unlistenVisible = null
-  }
-  if (unlistenSwitch) {
-    unlistenSwitch()
-    unlistenSwitch = null
-  }
+  // Tauri 事件监听由 useTauriEvent 自动取消，这里只清理 document 级监听
+  document.removeEventListener('contextmenu', onContextMenu)
 })
 
 // 设置界面左下角显示的版本号（来自 tauri.conf.json）
