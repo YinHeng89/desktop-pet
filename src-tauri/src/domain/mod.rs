@@ -6,6 +6,8 @@
 //
 // 验收：`grep -rn "tauri" src/domain/` 必须为空。
 
+pub mod gallery;
 pub mod geometry;
+pub mod layout;
 pub mod notify;
 pub mod pet;

@@ -507,7 +507,7 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 **目标**：把散落在 `main.rs` / `pet_import.rs` / `notify_server.rs` 中的**纯计算**全部抽到 `domain/`，
 这是整个重构**收益最大**的一步——抽出来的代码立刻可 100% 单测。
 
-- [ ] **2.1** ★ 新增 `src/lib.rs` + `Cargo.toml` 的 `[lib]`
+- [x] **2.1** ★ 新增 `src/lib.rs` + `Cargo.toml` 的 `[lib]`
   ```toml
   [lib]
   name = "petbuddy_lib"
@@ -516,14 +516,14 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
   ```
   `main.rs` 改为 `fn main() { petbuddy_lib::run() }`
   **这是 Tauri 官方推荐的集成测试前置条件**
-- [ ] **2.2** 迁移 `geometry.rs` → `domain/geometry.rs`（内容基本不变，仅移动 + 补充测试）
+- [x] **2.2** 迁移 `geometry.rs` → `domain/geometry.rs`（内容基本不变，仅移动 + 补充测试）
   - 🧪 补：`NaN` / `inf` / 负尺寸矩形 / 重叠矩形 / `scale=0`
-- [ ] **2.3** ★ 新增 `domain/layout.rs`
+- [x] **2.3** ★ 新增 `domain/layout.rs`
   - 抽出 `pet_window_size(scale) -> (w, h)`（从 `main.rs:71`）
   - 抽出 `anchor_bottom_right(old_pos, old_size, new_w, new_h, scale_factor) -> (x, y)`（从 `main.rs:101-110` 的内联计算）
   - 抽出常量：`FRAME_W/H`、`BUBBLE_ZONE_H`、`WINDOW_PAD`、`EDGE_GAP`、**`BASE_WINDOW_W`**
   - 🧪 补：scale=0.5/0.7/1.0/1.3 的黄金值快照；锚点计算在多次连续 resize 后右下角不漂移
-- [ ] **2.4** ★ 新增 `domain/pet/codec.rs`（纯函数，输入 `&[u8]`，输出 `Result`）
+- [x] **2.4** ★ 新增 `domain/pet/codec.rs`（纯函数，输入 `&[u8]`，输出 `Result`）
   - `webp_dimensions`（从 `pet_import.rs:72`）
   - `base64_encode` / `base64_decode`（从 `pet_import.rs:162/179`）
   - 🧪 补：
@@ -531,16 +531,16 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
     - **回归用例：VP8 宽度 ≥ 16384**（`pet_import.rs:82-84` 记录的历史 bug）
     - base64 roundtrip：长度 0/1/2/3/0x8000+1 的边界
     - 非 webp / 截断到 12 字节 / 空输入 → `None`
-- [ ] **2.5** ★ 新增 `domain/pet/validator.rs`
+- [x] **2.5** ★ 新增 `domain/pet/validator.rs`
   - `is_valid_pet_id`（从 `pet_import.rs:321-326` 的三处重复正则）
   - `clamp_seq`（从 `pet_import.rs:129`）
   - `safe_join(root, id)`：返回 `Result<PathBuf>` 的穿越检查
   - 🧪 补：id 白名单正反例各 6 个；`../`、`/etc`、空串、Unicode；`clamp_seq` 全覆盖
-- [ ] **2.6** ★ 新增 `domain/pet/model.rs`
+- [x] **2.6** ★ 新增 `domain/pet/model.rs`
   - `PetDef` / `FrameSeq` / **`Frame { width, height, cols }`** / `PetDefJson`
   - `build_pet_def(raw, bytes) -> PetDefJson`（从 `pet_import.rs:217`，改为不碰文件系统）
   - 🧪 补：11 行图 / 9 行图 / 不可解析→回退 / per-pet frame / actions 越界被移除
-- [ ] **2.7** ★ 新增 `domain/notify/http_request.rs` + `http_response.rs`
+- [x] **2.7** ★ 新增 `domain/notify/http_request.rs` + `http_response.rs`
   - `parse_request(&[u8]) -> Result<Request, HttpError>`（从 `notify_server.rs:76-140`）
   - `find_subslice` / Content-Length 解析 / body 边界判定全部纯函数化
   - `render_response(HttpError) -> Vec<u8>`：状态码与 body 构造
@@ -550,17 +550,18 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
     - 非 POST、非 `/notify` → 404；非法 JSON → 400；text 空 → 400
     - **text 121 字中文 → 400 且 error 文案正确**（按 chars 计数，回归中文计数逻辑）
     - Host 头非 `127.0.0.1:*` → 403；body > 8KB → 413
-- [ ] **2.8** 新增 `domain/gallery/index.rs`
+- [x] **2.8** 新增 `domain/gallery/index.rs`
   - `map_online_pets(Vec<RawOnlinePet>) -> Vec<OnlinePetMeta>`（名称回退链：`zh → en → name → slug`）
   - `preview_url(slug)` / `pet_json_url(slug)` / `spritesheet_url(slug)`
   - 🧪 补：回退链 4 级全覆盖；slug 为空被跳过
-- [ ] **2.9** ★ 新增 `error.rs`：`AppError { code: ErrorCode, message: String }`
+- [x] **2.9** ★ 新增 `error.rs`：`AppError { code: ErrorCode, message: String }`
   - `ErrorCode` 枚举：`InvalidPetId` / `ZipSlip` / `TooLarge` / `BadRequest` / `Network` / `Io` / `Platform` / `Serialization`
   - 实现 `From<std::io::Error>` / `From<serde_json::Error>` / `From<reqwest::Error>`
   - 所有 command 返回 `Result<T, AppError>`，前端按 `code` 映射文案
-- [ ] **2.10** 收敛重复 IPC：`update_interactive_rects` 与 `set_pet_hit_rects` 在前端只调前者
+- [x] **2.10** 收敛重复 IPC：`update_interactive_rects` 与 `set_pet_hit_rects` 在前端只调前者
   - 保留旧命令作兼容（标注 `#[deprecated]`），前端 `PetHost` 去掉 `setPetHitRects` 调用
   - 保留 `apply_pet_hit_rects`（Windows 需要显式 apply）
+  - ✅ 已完成：前端 `PetHost` 仅调 `updateInteractiveRects` + `applyPetHitRects`，`setPetHitRects` 调用已移除；Rust `set_pet_hit_rects` 用 doc `@deprecated` 标注（不用 `#[deprecated]` 属性，因 `generate_handler!` 展开处会触发 `-D warnings`）
 
 **✅ Phase 2 验收**：`cargo test` 新增 ≥60 个单测；`domain/` 模块**零 `tauri::` import**（用 grep 断言）；功能基线全绿。
 

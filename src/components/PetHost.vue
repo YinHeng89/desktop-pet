@@ -3,7 +3,6 @@ import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import {
   isTauri,
   updateInteractiveRects,
-  setPetHitRects,
   applyPetHitRects,
   startDragging,
   showPetWindow,
@@ -294,15 +293,14 @@ function reportInteractiveRects(): void {
   // 保持整窗可交互,等 currentPet 就绪后由 watch 触发重新上报真实矩形。
   if (!hasPetRect && rects.length > 0) {
     void updateInteractiveRects([])
-    void setPetHitRects([])
     return
   }
   // 统一上报可交互矩形（macOS/Windows 同一入口；Linux 目前 no-op）。
-  // 旧接口 setNotifyInteractiveRects / setPetHitRects 仍保留作兼容，但统一走此处。
+  // 旧命令 set_pet_hit_rects 已废弃，统一走 update_interactive_rects；
+  // apply_pet_hit_rects 仅 Windows 显式生效 SetWindowRgn 时需要。
   void updateInteractiveRects(rects)
   // Windows：SetWindowRgn 裁切需显式 apply 即时生效。
   // 注意：macOS 走 NSTimer 动态穿透，不需要 applyPetHitRects，但多调用一次 harmless。
-  void setPetHitRects(rects)
   if (hasPetRect) {
     void applyPetHitRects()
   }

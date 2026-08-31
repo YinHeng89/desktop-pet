@@ -67,29 +67,10 @@ fn broadcast_event(app: tauri::AppHandle, event: String, payload: Option<serde_j
 
 /// 按宠物缩放比例重设 main 窗口尺寸。
 /// 缩放变化时调用：窗口跟随宠物一起缩放，保证气泡+宠物不被裁剪。
-/// scale 范围 0.5~1.3（与 domain::geometry::MIN_SCALE / MAX_SCALE 及前端一致）；
-/// 宠物帧 192×208，窗口 = 气泡区 + 宠物区 + 留白。
 ///
-/// 按 scale 计算 main 宠物窗口的逻辑尺寸（宽×高，含 24px 缓冲）。
-/// scale 范围与前端 MIN_SCALE(0.5)~MAX_SCALE(1.3) 对齐，避免 Rust 与前端口径分裂
-/// 导致窗口尺寸和精灵图渲染尺寸不一致（宠物浮在窗口偏左上、右下角留白）。
-/// 统一使用 domain::geometry::clamp_scale,保证与前端及 Windows 端同一份规则。
+/// 纯计算已迁入 `domain::layout::pet_window_size`（常量 + 锚点算法集中于此，便于单测）。
 fn pet_window_size(scale: f64) -> (f64, f64) {
-    let scale = domain::geometry::clamp_scale(scale);
-    let pet_w = (192.0 * scale).round();
-    let pet_h = (208.0 * scale).round();
-    let bubble_h = (156.0 * scale).round();
-    // 宽：基线 320 × scale（等比缩放，与 worktrack 一致）；
-    // 高：气泡区 + 宠物区 + 底部留白 16（scale=1 时 156+208+16=380）
-    let mut ww = pet_w.max(320.0 * scale);
-    let mut wh = bubble_h + pet_h + 16.0;
-    // 缓冲：窗口比内容大一圈，避免缩放过程中宠物（canvas 已先按新 scale 渲染）
-    // 短暂超出旧窗口被 OS 裁掉而闪。宠物贴窗口 right/bottom:16px，缓冲落在
-    // 左/上透明区，不影响视觉锚点。
-    let pad = 24.0;
-    ww += pad;
-    wh += pad;
-    (ww, wh)
+    domain::layout::pet_window_size(scale)
 }
 
 /// 缩放时以窗口【右下角】为锚点重新定位：宠物贴窗口右下角，原地缩放不漂移。
@@ -107,15 +88,12 @@ fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
     // 旧位置 + 新宽度混用会让右下角算错，宠物每帧跳一下。
     let sf = w.scale_factor().unwrap_or(1.0);
     if let (Ok(pos), Ok(old)) = (w.outer_position(), w.outer_size()) {
-        // 旧右下角屏幕坐标（物理像素）：调用前的位置 + 调用前的尺寸
-        let right = pos.x + old.width as i32;
-        let bottom = pos.y + old.height as i32;
-        // 先改尺寸，再按「旧右下角」把新左上角定位回去，保证右下角不动
+        // 以窗口右下角为锚点重定位：先改尺寸，再按「旧右下角」把新左上角定位回去。
+        // 锚点算法见 domain::layout::anchor_bottom_right（纯函数，已单测）。
         let _ = w.set_size(tauri::LogicalSize::new(ww, wh));
-        let _ = w.set_position(tauri::PhysicalPosition::new(
-            ((right as f64 - ww * sf).round()) as i32,
-            ((bottom as f64 - wh * sf).round()) as i32,
-        ));
+        let (nx, ny) =
+            domain::layout::anchor_bottom_right(pos.x, pos.y, old.width, old.height, ww, wh, sf);
+        let _ = w.set_position(tauri::PhysicalPosition::new(nx, ny));
         // 尺寸/位置变更后必须重新应用命中矩形裁切：SetWindowRgn 的 region
         // 是相对窗口左上角的像素区域，窗口 resize/reposition 后旧 region 不会
         // 自动跟随——若不重裁，区域外那圈透明窗口（方形轮廓）会露出来，

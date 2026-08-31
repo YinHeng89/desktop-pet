@@ -15,10 +15,12 @@
 //
 // spritesheet 以 base64 data URL 返回（避免引入 asset 协议配置），前端直接可用。
 
-use serde::Serialize;
 use std::io::Read;
 use tauri::{Emitter, Manager};
 
+use crate::domain::gallery::index::{
+    map_online_pets, pet_json_url, spritesheet_url, OnlinePetMeta, RawOnlinePet,
+};
 use crate::domain::pet::codec::base64_decode;
 use crate::domain::pet::model::{build_pet_def, PetDefJson, RawPetJson};
 use crate::domain::pet::validator::safe_join;
@@ -286,11 +288,6 @@ pub async fn list_imported_pets(app: tauri::AppHandle) -> Result<Vec<PetDefJson>
 // 在线画廊：接入 awesome-codex-pet（GitHub raw 为权威源，codexpet.top 仅预览图）
 // ─────────────────────────────────────────────────────────────
 
-/// awesome-codex-pet 仓库（main 分支）原始内容基地址
-const CODEPET_GITHUB_RAW: &str = "https://raw.githubusercontent.com/legeling/awesome-codex-pet/main";
-/// 预览图基地址（codexpet.top 提供，已实测可用；加载失败前端回退文字）
-const CODEPET_PREVIEW_BASE: &str = "https://codexpet.top/assets/previews";
-
 /// 建连超时。
 const HTTP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// 单次请求总超时。
@@ -322,44 +319,10 @@ fn http_client() -> Result<&'static reqwest::Client, String> {
         .ok_or_else(|| "HTTP 客户端未初始化".to_string())
 }
 
-/// 在线宠物列表项（画廊用）。来自 awesome-codex-pet 的 pets.json 索引。
-#[derive(Serialize, Clone)]
-pub struct OnlinePetMeta {
-    /// 唯一标识（仓库目录 slug，如 firefly--lingxiaotian），下载时即作为本地 id
-    pub slug: String,
-    /// 显示名（优先中文 localized_names.zh，回退 name）
-    pub name: String,
-    pub author: String,
-    pub category: String,
-    pub description: String,
-    /// 精灵图版本（1 或 2），仅展示用，下载时按实际图尺寸修正
-    pub sprite_version: u32,
-    /// 预览图 URL（codexpet.top 的 idle.webp）；可能 404，前端需容错
-    pub preview_url: String,
-}
-
-#[derive(serde::Deserialize)]
-struct RawOnlinePet {
-    #[serde(default)]
-    slug: String,
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    localized_names: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    author: String,
-    #[serde(default)]
-    primary_category: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default, rename = "spriteVersionNumber")]
-    sprite_version_number: u32,
-}
-
 /// 浏览在线宠物：拉取 awesome-codex-pet 的 pets.json 索引并返回列表。
 #[tauri::command]
 pub async fn browse_online_pets() -> Result<Vec<OnlinePetMeta>, String> {
-    let url = format!("{CODEPET_GITHUB_RAW}/pets.json");
+    let url = format!("{}/pets.json", crate::domain::gallery::index::CODEPET_GITHUB_RAW);
     let client = http_client()?;
 
     let resp = client
@@ -375,39 +338,7 @@ pub async fn browse_online_pets() -> Result<Vec<OnlinePetMeta>, String> {
         .await
         .map_err(|e| format!("解析宠物索引失败: {e}"))?;
 
-    let mut out = Vec::with_capacity(list.len());
-    for p in list {
-        if p.slug.is_empty() {
-            continue;
-        }
-        // 显示名：优先中文，回退英文、原始名、slug
-        let name = p
-            .localized_names
-            .get("zh")
-            .cloned()
-            .filter(|s| !s.is_empty())
-            .or_else(|| p.localized_names.get("en").cloned())
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                if p.name.is_empty() {
-                    None
-                } else {
-                    Some(p.name.clone())
-                }
-            })
-            .unwrap_or_else(|| p.slug.clone());
-        let preview_url = format!("{CODEPET_PREVIEW_BASE}/{}/webp/idle.webp", p.slug);
-        out.push(OnlinePetMeta {
-            slug: p.slug,
-            name,
-            author: p.author,
-            category: p.primary_category,
-            description: p.description,
-            sprite_version: p.sprite_version_number,
-            preview_url,
-        });
-    }
-    Ok(out)
+    Ok(map_online_pets(list))
 }
 
 /// 把 pet.json 的 `id` 统一改写为 slug，返回规范化后的 JSON 文本。
@@ -452,8 +383,8 @@ pub async fn download_online_pet(
 
     let client = http_client()?;
 
-    let json_url = format!("{CODEPET_GITHUB_RAW}/pets/{slug}/pet.json");
-    let sheet_url = format!("{CODEPET_GITHUB_RAW}/pets/{slug}/spritesheet.webp");
+    let json_url = pet_json_url(&slug);
+    let sheet_url = spritesheet_url(&slug);
 
     let json_resp = client
         .get(&json_url)

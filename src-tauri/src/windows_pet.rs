@@ -53,7 +53,10 @@ pub(crate) fn store_hit_rects(rects: &[Rect]) {
 /// 存为静态,待 apply_pet_hit_rects 时裁切窗口。空数组表示尚未渲染出有效元素,
 /// 此时把 RECTS_INITIALIZED 置回 false,避免「已初始化但矩形为空」导致整窗永久穿透。
 ///
-/// 向后兼容:旧命令名。后续前端统一走 update_interactive_rects。
+/// @deprecated 兼容旧前端：请改用 `update_interactive_rects`（跨平台统一入口，
+/// 内部已按平台分派到 store_hit_rects）。新代码勿再调用本命令。
+/// （注：此处用 doc 标注而非 `#[deprecated]` 属性，避免 generate_handler! 展开处
+/// 触发 `-D warnings` 的弃用告警。）
 #[tauri::command]
 pub fn set_pet_hit_rects(rects: Vec<Rect>) {
     store_hit_rects(&rects);
