@@ -16,6 +16,7 @@ import {
   MIN_SCALE,
   MAX_SCALE,
   type PetDef,
+  type PetFrame,
 } from '../store/pet'
 import { pushNotify } from '../store/notify'
 import {
@@ -344,6 +345,7 @@ async function downloadPet(p: OnlinePetMeta): Promise<void> {
       idle: PetDef['idle']
       talk: PetDef['talk']
       actions: Record<string, PetDef['idle']>
+      frame: PetFrame
     }
     const pet = registerDownloadedPet(def)
     // 下载成功后自动切换到该宠物（跨窗口广播，main 宠物窗口实时生效）

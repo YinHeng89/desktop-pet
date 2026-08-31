@@ -127,9 +127,9 @@ fn content_length(headers: &str) -> Option<usize> {
 /// 任意网页都能对 127.0.0.1 发简单请求，若不校验 Host，
 /// 用户浏览恶意页面时宠物就会被随意操纵。
 ///
-/// - HTTP/1.1 请求必带 Host，缺失即视为不合法
-/// - 端口不参与比较（允许任意端口，便于测试与反向代理场景）
-/// - IPv6 字面量的 `[::1]:8756` 形式需单独拆解
+///   - HTTP/1.1 请求必带 Host，缺失即视为不合法
+///   - 端口不参与比较（允许任意端口，便于测试与反向代理场景）
+///   - IPv6 字面量的 `[::1]:8756` 形式需单独拆解
 fn is_allowed_host(host: Option<&str>) -> bool {
     let Some(host) = host else { return false };
     let host = host.trim();
@@ -212,10 +212,10 @@ pub fn start(app: tauri::AppHandle) {
 /// 处理单个连接。
 ///
 /// 读取顺序刻意安排为「边读边卡上限」，而不是先读满再校验：
-///   1. 每次 read 后检查总截止时间（慢速攻击）
-///   2. header 未收完但已超 MAX_HEADER_BYTES → 431
-///   3. header 收完后立即校验 Host（403）与 Content-Length（413）
-///   4. 之后才按声明长度继续读 body，且总字节数不超过 header+body 上限
+/// 每次 read 后先检查总截止时间（防慢速攻击）；header 未收完但已超
+/// MAX_HEADER_BYTES 时返回 431；header 收完后立即校验 Host（403）与
+/// Content-Length（413）；之后才按声明的 body 长度继续读取，且总字节数
+/// 不超过 header+body 上限。
 fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> io::Result<()> {
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
     let deadline = Instant::now() + TOTAL_TIMEOUT;

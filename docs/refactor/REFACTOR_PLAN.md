@@ -358,7 +358,7 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 
 **目标**：清掉 Review 中的 P0/P1 缺陷。**每项一个 PR，每项带回归测试。**
 
-- [ ] **1.1** 🧪 **P0-1 外部宠物 per-pet frame 支持（Rust 侧产出）**
+- [x] **1.1** 🧪 **P0-1 外部宠物 per-pet frame 支持（Rust 侧产出）**
   - `RawPetJson` 增加 `frame: Option<RawFrame { width, height, cols }>`
   - `build_pet_def` 用 webp 实际尺寸 + 声明 frame 计算 `rows/cols`，返回 `PetDefJson.frame`
   - **验收**：192×208/8列 与 非标尺寸（如 256×256/6列）两类包均能正确切帧
@@ -370,18 +370,18 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 - [x] **1.4** 🧪 **P0-4 `duration` 参数端到端生效**
   - `NotifyItem` 增加 `duration?: number`；`showNotify` 用 `item.duration ?? DEFAULT_BUBBLE_MS`
   - **回归用例**：`{duration: 1000}` → 1s 后气泡消失（用 vi.useFakeTimers）
-- [ ] **1.5** 🧪 **P0-5 macOS NSTimer tick 健壮性**
+- [x] **1.5** 🧪 **P0-5 macOS NSTimer tick 健壮性**
   - tick 整体包 `catch_unwind(AssertUnwindSafe(...))`
   - 所有 `Mutex::lock().unwrap()` → `if let Ok(g) = ... else { return; }`
 - [x] **1.6** 🧪 **P1-1 `PetHost` 事件监听泄漏**
   - 抽出 `useTauriEvent(name, handler)` composable，内部 `onMounted` 注册、`onUnmounted` 取消
   - **回归用例**：mount → unmount → 断言所有监听被取消（mock `listen` 返回的 un 被调用 N 次）
-- [ ] **1.7** 🧪 **P1-2 `reqwest` 超时**
+- [x] **1.7** 🧪 **P1-2 `reqwest` 超时**
   - `Client::builder().timeout(Duration::from_secs(15)).connect_timeout(5s)`
   - 客户端提取为 `OnceLock<Client>` 复用连接池
 - [x] **1.8** 🧪 **P1-3 缩放闪空白帧**：`displayScale` watch 改完 canvas 尺寸后立即 `drawFrame(seq.row, frameIdx)`
 - [x] **1.9** 🧪 **P1-4 切宠物残影**：`loadImage()` 开头 `ctx.clearRect` + 置 `curSeqKey = ''`
-- [ ] **1.10** **P1-5 `pushNotify` 未处理的 Promise**
+- [x] **1.10** **P1-5 `pushNotify` 未处理的 Promise**
   - `PetSettings` 中 6 处调用统一改为 `void pushNotify(...).catch(e => showError(e))`
   - 加 ESLint 规则 `@typescript-eslint/no-floating-promises`
 - [x] **1.11** **P1-6 文案乱码 + 文案纠错**
@@ -460,6 +460,43 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 > README 补充错误响应码表与安全边界说明。
 >
 > **当前测试规模**：前端 21 passed / Rust 24 passed。
+
+> ### 追加完成：1.1（P0-1 外部宠物 per-pet frame 支持）
+>
+> 之前「帧尺寸」是写死的全局常量（192×208、8 列），所有宠物共用，
+> 非标准外部包（高清帧、或 256×256/6 列的包）切帧错位。
+>
+> 变更：
+>
+> - `PetDefJson` 新增 `frame: { width, height, cols, rows }`；`RawPetJson` 新增
+>   可选 `frame: { width, height, cols }`。
+> - 新增 `compute_frame()`：声明优先，rows 由精灵图实际高度 / 帧高推导；
+>   未声明则用默认 192×208/8 列且 rows 由 sheet 高 / 208 推导。
+> - `clamp_seq()` 改用该宠物的**真实列数**而非写死的 `FRAME_COLS`，
+>   修掉了「17 列高清包的帧被截断到 8 列」的隐藏 bug。
+> - 前端：PetDef 加 `frame` 字段（可选，内置宠物走全局 petStore.frame）；
+>   `SpritePet` 改为 `currentPet.frame ?? petStore.frame`，外部宠物按自己的
+>   几何切帧。
+>
+> 新增 7 条 Rust 单测，覆盖验收两类包（192×208/8、256×256/6）及 17 列截断等。
+> 注：为单测构造的 `make_webp` 已与 `webp_dimensions` 的真实解析偏移对齐
+> （该函数从 data[20] 起读 24 位宽/高）。
+>
+> ### 追加完成：1.5 / 1.7 / 1.10
+>
+> **1.5 macOS NSTimer tick**：`tick` 逻辑抽到 `tick_inner()`（返回 `Option<()>`，
+> 锁中毒即提前 return），新增 `lock_ok()` 取锁助手把 hot-path 上的 `.unwrap()`
+> abort 风险转为「跳过本次 tick」；`tick` 方法体包 `catch_unwind`，跨 FFI 边界
+> panic 不再直接 abort 整个进程。新增 2 条 `lock_ok` 单测。
+>
+> **1.7 reqwest 超时**：抽出 `http_client()`（OnceLock 共享，连接复用 +
+> connect_timeout 5s / timeout 15s），替换两处各自新建且**无超时**的客户端
+> （reqwest 默认不超时，网络挂起时画廊永久卡 loading）。新增 1 条复用单测。
+>
+> **1.10 pushNotify 未处理 Promise**：`PetSettings` 新增 `notify()` 包装，
+> 6 处裸 `pushNotify(...)` 改为走包装，失败仅 console.error 不打断流程。
+>
+> **当前测试规模**：前端 21 passed / Rust 33 passed。
 
 **✅ Phase 1 验收**：功能基线 A/B/C/D/E 全量回归通过；P0 五项全部关闭；新增 ≥20 个回归测试。
 

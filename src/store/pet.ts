@@ -9,6 +9,13 @@ export interface FrameSeq {
   count: number
   fps: number
 }
+/** 单帧几何（来自 Rust 侧 per-pet 计算，见 pet_import::compute_frame）。 */
+export interface PetFrame {
+  width: number
+  height: number
+  cols: number
+  rows: number
+}
 export interface PetDef {
   id: string
   displayName: string
@@ -18,6 +25,9 @@ export interface PetDef {
   idle: FrameSeq
   talk: FrameSeq
   actions?: Record<string, FrameSeq>
+  /** 该宠物自己的帧几何；外部宠物尺寸各异必须按它切帧。
+   *  内置宠物走全局 petStore.frame（manifest.frame），故此处可选。 */
+  frame?: PetFrame
   external?: boolean
 }
 export interface PetManifest {
@@ -115,6 +125,7 @@ async function loadExternalPets(): Promise<void> {
         idle: FrameSeq
         talk: FrameSeq
         actions: Record<string, FrameSeq>
+        frame: PetFrame
       }>
     >('list_imported_pets')
     if (!list || !Array.isArray(list)) return
@@ -129,6 +140,7 @@ async function loadExternalPets(): Promise<void> {
         idle: ext.idle,
         talk: ext.talk,
         actions: ext.actions,
+        frame: ext.frame,
         external: true,
       })
     }
@@ -147,6 +159,7 @@ export async function importExternalPet(base64: string): Promise<PetDef> {
     idle: FrameSeq
     talk: FrameSeq
     actions: Record<string, FrameSeq>
+    frame: PetFrame
   }>('import_pet', { base64 })
   if (!ext) throw new Error('导入失败：Rust 返回空')
 
@@ -159,6 +172,7 @@ export async function importExternalPet(base64: string): Promise<PetDef> {
     idle: ext.idle,
     talk: ext.talk,
     actions: ext.actions,
+    frame: ext.frame,
     external: true,
   }
   const idx = petStore.pets.findIndex((p) => p.id === ext.id)
@@ -176,6 +190,7 @@ export function registerDownloadedPet(ext: {
   idle: FrameSeq
   talk: FrameSeq
   actions: Record<string, FrameSeq>
+  frame: PetFrame
 }): PetDef {
   const pet: PetDef = {
     id: ext.id,
@@ -186,6 +201,7 @@ export function registerDownloadedPet(ext: {
     idle: ext.idle,
     talk: ext.talk,
     actions: ext.actions,
+    frame: ext.frame,
     external: true,
   }
   const idx = petStore.pets.findIndex((p) => p.id === ext.id)

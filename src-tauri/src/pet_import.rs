@@ -25,6 +25,20 @@ pub struct FrameSeqJson {
     pub fps: u32,
 }
 
+/// 单帧几何信息：前端按此切分精灵图（CSS background-position / canvas drawImage）。
+///
+/// 之前「帧尺寸」是写死的全局常量（192×208、8 列），所有宠物共用。
+/// 这让非标准外部包（如高清帧、或 256×256/6 列的包）切帧错位。
+/// 现在每个宠物独立携带自己的 frame：width/height 由 pet.json 的 frame 声明给出，
+/// cols 由声明或精灵图实际宽度推导，rows 由精灵图实际高度 / 帧高得出。
+#[derive(Serialize, Clone, PartialEq, Eq, Debug)]
+pub struct PetFrameJson {
+    pub width: u32,
+    pub height: u32,
+    pub cols: u32,
+    pub rows: u32,
+}
+
 #[derive(Serialize, Clone)]
 pub struct PetDefJson {
     pub id: String,
@@ -35,6 +49,8 @@ pub struct PetDefJson {
     pub idle: FrameSeqJson,
     pub talk: FrameSeqJson,
     pub actions: std::collections::BTreeMap<String, FrameSeqJson>,
+    /// 该宠物自己的单帧几何（见 PetFrameJson 说明）。
+    pub frame: PetFrameJson,
 }
 
 #[derive(serde::Deserialize)]
@@ -50,6 +66,17 @@ struct RawPetJson {
     talk: Option<RawSeq>,
     #[serde(default)]
     actions: Option<std::collections::BTreeMap<String, RawSeq>>,
+    /// 可选的帧几何声明。缺失时由精灵图实际尺寸回退推导（见 compute_frame）。
+    #[serde(default)]
+    frame: Option<RawFrame>,
+}
+
+/// 外部 pet.json 里的帧几何声明（可选）。
+#[derive(serde::Deserialize, Clone)]
+struct RawFrame {
+    width: u32,
+    height: u32,
+    cols: u32,
 }
 #[derive(serde::Deserialize, Clone)]
 struct RawSeq {
@@ -64,12 +91,9 @@ fn seq(row: u32, count: u32, fps: u32) -> FrameSeqJson {
 
 /// 极简 webp 尺寸解析（零依赖，只读文件头，不解码像素）。
 ///
-/// webp 三种编码的尺寸都在头部：
-///   - VP8 (lossy)   : "VP8 " chunk，帧头 10 字节，第 6~9 字节为 14 位 width/height
-///   - VP8L (lossless): "VP8L" chunk，5 字节，含 14 位 width/height
-///   - VP8X (extended): "VP8X" chunk，含 24 位 width-1/height-1
-///
-/// 返回 (width, height)，无法识别时返回 None。
+/// webp 三种编码的尺寸都在头部：VP8(lossy) 帧头第 6~9 字节为 14 位
+/// width/height；VP8L(lossless) 头部含 14 位 width/height；VP8X(extended)
+/// 含 24 位 width-1/height-1。返回 (width, height)，无法识别时返回 None。
 fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     // RIFF 头：'RIFF' + size(4) + 'WEBP'
     if data.len() < 30 || &data[0..4] != b"RIFF" || &data[8..12] != b"WEBP" {
@@ -123,19 +147,21 @@ fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 const FRAME_H: u32 = 208;
 const FRAME_COLS: u32 = 8;
 
-/// 根据精灵图实际尺寸，修正一个帧段的 row/count，避免越界。
-/// - row 超出实际行数 → 返回 None（该动作不可用，应移除）
-/// - count / fps 为 0 → 用兜底值（0 帧或 0 fps 会导致动画卡死/不播放）
-/// - count 超出该行剩余列数 → 截断到可用列数
-fn clamp_seq(s: FrameSeqJson, rows: u32) -> Option<FrameSeqJson> {
+/// 根据精灵图实际尺寸，修正一个帧段的 row/count，避免越界：
+///
+///   - row 超出实际行数 → 返回 None（该动作不可用，应移除）
+///   - count / fps 为 0 → 用兜底值（0 帧或 0 fps 会导致动画卡死/不播放）
+///   - count 超出该行剩余列数 → 截断到可用列数（用该宠物的真实列数，
+///     而非写死的 FRAME_COLS，否则 17 列高清包的帧会被错误截断）
+fn clamp_seq(s: FrameSeqJson, rows: u32, cols: u32) -> Option<FrameSeqJson> {
     if s.row >= rows {
         return None;
     }
-    // 该行最多 FRAME_COLS 帧，count 不应超过
+    // 该行最多 cols 帧，count 不应超过
     let count = if s.count == 0 {
-        FRAME_COLS
+        cols
     } else {
-        s.count.min(FRAME_COLS)
+        s.count.min(cols)
     };
     if count == 0 {
         return None;
@@ -222,30 +248,60 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// 计算该宠物的单帧几何（PetFrameJson）。
+///
+/// 声明优先：pet.json 显式声明 frame{width,height,cols} 时直接采用，
+/// rows 由精灵图实际高度 / 帧高推导（声明宽度/高度/列数若为 0 则回退到默认值）。
+/// 未声明时回退到默认 192×208 / 8 列，rows 由精灵图实际高度 / 208 推导。
+///
+/// 注意：sheet 实际尺寸只在「解析失败」时才回退（那才是真问题，
+/// 见 build_pet_def 的告警），正常包都能拿到真实尺寸。
+fn compute_frame(raw: &RawPetJson, sheet: Option<(u32, u32)>) -> PetFrameJson {
+    let (sheet_w, sheet_h) = sheet.unwrap_or((192 * 8, 208 * 11));
+
+    let declared = raw.frame.as_ref();
+    // 声明值若为 0（非法）则回退到默认；用 max(1) 避免后续除法除零。
+    let frame_h = declared.map(|f| f.height).unwrap_or(FRAME_H).max(1);
+    let cols = declared.map(|f| f.cols).unwrap_or(FRAME_COLS).max(1);
+
+    // 未声明宽时用「精灵图实际宽 / 列数」反推单帧宽，更贴合真实包。
+    let frame_w = if let Some(f) = declared {
+        if f.width == 0 {
+            sheet_w / cols
+        } else {
+            f.width
+        }
+    } else {
+        sheet_w / cols
+    };
+
+    // rows 由精灵图实际高度 / 帧高得出（frame_h 已 ≥1，无需再判零）
+    let rows = (sheet_h / frame_h).max(1);
+
+    PetFrameJson {
+        width: frame_w,
+        height: frame_h,
+        cols,
+        rows,
+    }
+}
+
 /// 从 pet.json 内容 + 精灵图字节，组装宠物定义。
 ///
-/// 关键：外部宠物精灵图行数不统一（标准 11 行 vs 某些包 9 行）。
-/// 这里解析 webp 实际尺寸，算出真实行数，对默认模板的 row/count 做越界修正：
-///   - row 越界 → 该动作被移除（前端不会播放它，避免画布清空导致宠物消失）
-///   - count 越界 → 截断到该行可用列数
+/// 关键：外部宠物精灵图行数/列数不统一（标准 11 行 vs 某些包 9 行、列数也非 8）。
+/// 这里解析 webp 实际尺寸，算出真实行/列数，对默认模板的 row/count 做越界修正：
+/// row 越界的动作会被移除（前端不会播放它，避免画布清空导致宠物消失），
+/// count 越界则截断到该行可用列数（用该宠物的真实列数而非写死的 FRAME_COLS）。
+/// 同时产出 per-pet frame 几何（见 compute_frame），让前端正确切帧。
 fn build_pet_def(raw: &RawPetJson, spritesheet_bytes: &[u8]) -> PetDefJson {
-    // 计算精灵图实际行数（列数固定 FRAME_COLS）。
-    // 注意:FRAME_H / FRAME_COLS 只是 Rust 侧用于 row 越界估算的「默认假设」,
-    // 项目明确支持非标准外部包(Codex 生成的高清大帧,帧尺寸远大于 192x208、
-    // 列数也非 8)。前端 SpritePet 用 manifest 声明的真实 frame 尺寸 + naturalWidth
-    // 自适应取帧,所以「不符合 192x208/8 列」并非错误,不应告警(否则对正常显示的
-    // 外部宠物产生误导性的「帧可能错位」噪声)。
-    // 仅当 webp 尺寸完全无法解析(非有效 webp)时才告警,那才是真问题。
-    let (rows, parse_warn): (u32, Option<String>) = match webp_dimensions(spritesheet_bytes) {
-        Some((_w, h)) => (h / FRAME_H, None),
-        None => (
-            11,
-            Some("无法解析精灵图尺寸(非有效 webp?),按 11 行回退处理".into()),
-        ),
-    };
-    if let Some(msg) = parse_warn {
-        eprintln!("[pet_import] 警告(宠物 {}): {msg}", raw.id);
+    let sheet = webp_dimensions(spritesheet_bytes);
+    if sheet.is_none() {
+        eprintln!(
+            "[pet_import] 警告(宠物 {}): 无法解析精灵图尺寸(非有效 webp?),按默认 8 列回退处理",
+            raw.id
+        );
     }
+    let frame = compute_frame(raw, sheet);
 
     let idle_raw = raw
         .idle
@@ -267,13 +323,14 @@ fn build_pet_def(raw: &RawPetJson, spritesheet_bytes: &[u8]) -> PetDefJson {
         })
         .unwrap_or_else(default_actions);
 
-    // 越界修正：idle/talk 必须有，越界则回退到 row 0
-    let idle = clamp_seq(idle_raw, rows).unwrap_or_else(|| seq(0, 6, 8));
-    let talk = clamp_seq(talk_raw, rows).unwrap_or_else(|| idle.clone());
+    // 越界修正：idle/talk 必须有，越界则回退到 row 0（count 用真实列数兜底）
+    let idle =
+        clamp_seq(idle_raw, frame.rows, frame.cols).unwrap_or_else(|| seq(0, frame.cols.min(6), 8));
+    let talk = clamp_seq(talk_raw, frame.rows, frame.cols).unwrap_or_else(|| idle.clone());
     // actions 逐个修正，越界的直接移除
     let actions: std::collections::BTreeMap<String, FrameSeqJson> = actions_raw
         .into_iter()
-        .filter_map(|(k, s)| clamp_seq(s, rows).map(|cs| (k, cs)))
+        .filter_map(|(k, s)| clamp_seq(s, frame.rows, frame.cols).map(|cs| (k, cs)))
         .collect();
 
     PetDefJson {
@@ -290,6 +347,7 @@ fn build_pet_def(raw: &RawPetJson, spritesheet_bytes: &[u8]) -> PetDefJson {
         idle,
         talk,
         actions,
+        frame,
     }
 }
 
@@ -901,5 +959,160 @@ mod tests {
         let a = http_client().unwrap();
         let b = http_client().unwrap();
         assert!(std::ptr::eq(a, b));
+    }
+
+    // ── 外部宠物 per-pet frame 支持（P0-1）──
+
+    /// 构造一个尺寸为 (w, h) 的最小有效 VP8X webp（仅含头部，不含像素），
+    /// 供 build_pet_def 解析实际尺寸用。
+    ///
+    /// 注意：与 webp_dimensions 的实际解析偏移对齐——该函数从 data[20] 起读
+    /// 24 位宽/高（data[16..20] 是它不读的 chunk size 字段），故 width-1 放
+    /// data[20..23]、height-1 放 data[23..26]。
+    fn make_webp(w: u32, h: u32) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(b"RIFF");
+        v.extend_from_slice(&(22u32).to_le_bytes());
+        v.extend_from_slice(b"WEBP");
+        v.extend_from_slice(b"VP8X");
+        v.extend_from_slice(&10u32.to_le_bytes()); // data[16..20] chunk size（webp_dims 不读）
+        let w1 = (w - 1).to_le_bytes();
+        let h1 = (h - 1).to_le_bytes();
+        v.push(w1[0]);
+        v.push(w1[1]);
+        v.push(w1[2]); // data[20..23] = width-1
+        v.push(h1[0]);
+        v.push(h1[1]);
+        v.push(h1[2]); // data[23..26] = height-1
+        v.extend_from_slice(&[0u8; 4]); // 补足到 30 字节（满足 data.len() < 30 检查）
+        v
+    }
+
+    fn raw_with_frame(id: &str, frame: Option<RawFrame>) -> RawPetJson {
+        RawPetJson {
+            id: id.to_string(),
+            display_name: None,
+            description: None,
+            idle: None,
+            talk: None,
+            actions: None,
+            frame,
+        }
+    }
+
+    #[test]
+    fn compute_frame_standard_192x208_8cols() {
+        // 验收用例 1：标准包，sheet 1536×2288（8 列 × 11 行）
+        let raw = raw_with_frame(
+            "std",
+            Some(RawFrame {
+                width: 192,
+                height: 208,
+                cols: 8,
+            }),
+        );
+        let f = compute_frame(&raw, Some((1536, 2288)));
+        assert_eq!(
+            f,
+            PetFrameJson {
+                width: 192,
+                height: 208,
+                cols: 8,
+                rows: 11
+            }
+        );
+    }
+
+    #[test]
+    fn compute_frame_nonstandard_256x256_6cols() {
+        // 验收用例 2：非标包，sheet 1536×2816（6 列 × 11 行）
+        let raw = raw_with_frame(
+            "hd",
+            Some(RawFrame {
+                width: 256,
+                height: 256,
+                cols: 6,
+            }),
+        );
+        let f = compute_frame(&raw, Some((1536, 2816)));
+        assert_eq!(
+            f,
+            PetFrameJson {
+                width: 256,
+                height: 256,
+                cols: 6,
+                rows: 11
+            }
+        );
+    }
+
+    #[test]
+    fn compute_frame_declares_width_zero_falls_back_to_sheet() {
+        // 声明宽度为 0（非法）→ 用 sheet 宽 / cols 反推单帧宽
+        let raw = raw_with_frame(
+            "x",
+            Some(RawFrame {
+                width: 0,
+                height: 200,
+                cols: 5,
+            }),
+        );
+        let f = compute_frame(&raw, Some((1000, 2000)));
+        assert_eq!(f.width, 200); // 1000 / 5
+        assert_eq!(f.height, 200);
+        assert_eq!(f.cols, 5);
+        assert_eq!(f.rows, 10); // 2000 / 200
+    }
+
+    #[test]
+    fn compute_frame_undeclared_derives_from_sheet() {
+        // 完全不声明 frame → 默认 192×208/8 列，rows 由 sheet 高 / 208 得出
+        let raw = raw_with_frame("def", None);
+        let f = compute_frame(&raw, Some((1536, 2288)));
+        assert_eq!(f.width, 192); // 1536 / 8
+        assert_eq!(f.height, 208);
+        assert_eq!(f.cols, 8);
+        assert_eq!(f.rows, 11);
+    }
+
+    #[test]
+    fn clamp_seq_uses_real_cols_not_hardcoded() {
+        // 17 列高清包：count 上限应为 17，而非写死的 8（回归 P0-1 关键）
+        let s = seq(0, 20, 10);
+        let c = clamp_seq(s, 11, 17).unwrap();
+        assert_eq!(c.count, 17);
+
+        // 6 列包：count 超过 6 应被截断到 6
+        let c2 = clamp_seq(seq(0, 9, 10), 11, 6).unwrap();
+        assert_eq!(c2.count, 6);
+
+        // 行越界 → None
+        assert!(clamp_seq(seq(99, 4, 10), 11, 8).is_none());
+    }
+
+    #[test]
+    fn build_pet_def_emits_per_pet_frame() {
+        // 端到端：build_pet_def 把 per-pet frame 写进 PetDefJson.frame
+        let raw = raw_with_frame(
+            "e2e",
+            Some(RawFrame {
+                width: 256,
+                height: 256,
+                cols: 6,
+            }),
+        );
+        let sheet = make_webp(1536, 2816);
+        let def = build_pet_def(&raw, &sheet);
+        assert_eq!(
+            def.frame,
+            PetFrameJson {
+                width: 256,
+                height: 256,
+                cols: 6,
+                rows: 11
+            }
+        );
+        // 默认 idle 的 count 应受真实列数限制（6），而非 8
+        assert_eq!(def.idle.count, 6);
     }
 }

@@ -33,7 +33,9 @@ let acc = 0
 let curSeqKey = ''
 
 const pet = computed(() => currentPet.value)
-const frame = computed(() => petStore.frame)
+// 优先用当前宠物自己的帧几何（外部宠物尺寸各异），回退到全局默认 frame。
+// 之前这里只取全局 petStore.frame（写死 192×208/8 列），导致非标外部包切帧错位。
+const frame = computed(() => pet.value?.frame ?? petStore.frame)
 const displayScale = computed(() => props.scale || petStore.scale || 1)
 
 // 根据 state 取对应帧段：idle / talk / actions[state]

@@ -130,9 +130,9 @@ pub fn setup_notify_interactive(app: &tauri::AppHandle) {
 /// 若用 `SetWindowRgn` 自绘圆角，会裁掉整个窗口 shape 之外的像素 —— 包括系统投影，
 /// 导致投影消失(之前踩过的坑)。因此设置窗口改用 DWM 方案：
 ///
-/// 1. `DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUNDLARGE`(系统最大圆角档，~8px)，
-///    由 DWM 在系统层裁切窗口四角，且**不裁掉投影**(投影由 DWM 合成在 shape 之外)。
-/// 2. `DWMWA_SHADOW = 2`(开启系统默认阴影)，让无边框窗口获得悬浮投影。
+///   - `DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUNDLARGE`(系统最大圆角档，~8px)，
+///     由 DWM 在系统层裁切窗口四角，且**不裁掉投影**(投影由 DWM 合成在 shape 之外)。
+///   - `DWMWA_SHADOW = 2`(开启系统默认阴影)，让无边框窗口获得悬浮投影。
 ///
 /// 这样圆角与 CSS `--radius-window`(已改为 8px)在视觉上一致，且投影由系统绘制、不被裁。
 ///
