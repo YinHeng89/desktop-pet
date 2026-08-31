@@ -1,9 +1,11 @@
-// 外部宠物导入：把用户选择的 .zip 压缩包解压到 app_data_dir/pets/<id>/，
-// 读取其中的 pet.json（Codex 格式），套用标准精灵图布局（192x208、8 列），
-// 返回宠物定义给前端注册进 petStore。
+// 外部宠物导入（装配 / IO 层）：把用户选择的 .zip 解压到 app_data_dir/pets/<id>/，
+// 读取其中的 pet.json（Codex 格式），套用标准精灵图布局，返回宠物定义给前端。
+//
+// 纯逻辑（帧几何计算、webp 尺寸解析、base64、id 校验、越界修正）已迁入
+// `domain::pet`，本文件只做平台 IO：解压、读写磁盘、网络、拼目录路径。
 //
 // zip 结构约定（与内置宠物包一致）：
-//   pet.json           # 必填：{ id, displayName, description, spritesheetPath }
+//   pet.json           # 必填：{ id, displayName, description, ... }
 //   spritesheet.webp   # 必填：精灵图
 //
 // 帧布局默认套用 Codex Pet V2 标准（与 manifest.json 内置宠物一致）：
@@ -17,339 +19,9 @@ use serde::Serialize;
 use std::io::Read;
 use tauri::{Emitter, Manager};
 
-// 返回给前端的宠物定义
-#[derive(Serialize, Clone)]
-pub struct FrameSeqJson {
-    pub row: u32,
-    pub count: u32,
-    pub fps: u32,
-}
-
-/// 单帧几何信息：前端按此切分精灵图（CSS background-position / canvas drawImage）。
-///
-/// 之前「帧尺寸」是写死的全局常量（192×208、8 列），所有宠物共用。
-/// 这让非标准外部包（如高清帧、或 256×256/6 列的包）切帧错位。
-/// 现在每个宠物独立携带自己的 frame：width/height 由 pet.json 的 frame 声明给出，
-/// cols 由声明或精灵图实际宽度推导，rows 由精灵图实际高度 / 帧高得出。
-#[derive(Serialize, Clone, PartialEq, Eq, Debug)]
-pub struct PetFrameJson {
-    pub width: u32,
-    pub height: u32,
-    pub cols: u32,
-    pub rows: u32,
-}
-
-#[derive(Serialize, Clone)]
-pub struct PetDefJson {
-    pub id: String,
-    pub display_name: String,
-    pub description: String,
-    /// spritesheet 的 base64 data URL（data:image/webp;base64,...）
-    pub spritesheet: String,
-    pub idle: FrameSeqJson,
-    pub talk: FrameSeqJson,
-    pub actions: std::collections::BTreeMap<String, FrameSeqJson>,
-    /// 该宠物自己的单帧几何（见 PetFrameJson 说明）。
-    pub frame: PetFrameJson,
-}
-
-#[derive(serde::Deserialize)]
-struct RawPetJson {
-    id: String,
-    #[serde(rename = "displayName", default)]
-    display_name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    idle: Option<RawSeq>,
-    #[serde(default)]
-    talk: Option<RawSeq>,
-    #[serde(default)]
-    actions: Option<std::collections::BTreeMap<String, RawSeq>>,
-    /// 可选的帧几何声明。缺失时由精灵图实际尺寸回退推导（见 compute_frame）。
-    #[serde(default)]
-    frame: Option<RawFrame>,
-}
-
-/// 外部 pet.json 里的帧几何声明（可选）。
-#[derive(serde::Deserialize, Clone)]
-struct RawFrame {
-    width: u32,
-    height: u32,
-    cols: u32,
-}
-#[derive(serde::Deserialize, Clone)]
-struct RawSeq {
-    row: u32,
-    count: u32,
-    fps: u32,
-}
-
-fn seq(row: u32, count: u32, fps: u32) -> FrameSeqJson {
-    FrameSeqJson { row, count, fps }
-}
-
-/// 极简 webp 尺寸解析（零依赖，只读文件头，不解码像素）。
-///
-/// webp 三种编码的尺寸都在头部：VP8(lossy) 帧头第 6~9 字节为 14 位
-/// width/height；VP8L(lossless) 头部含 14 位 width/height；VP8X(extended)
-/// 含 24 位 width-1/height-1。返回 (width, height)，无法识别时返回 None。
-fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
-    // RIFF 头：'RIFF' + size(4) + 'WEBP'
-    if data.len() < 30 || &data[0..4] != b"RIFF" || &data[8..12] != b"WEBP" {
-        return None;
-    }
-    let chunk = &data[12..16];
-    let payload = &data[16..];
-    match chunk {
-        b"VP8 " => {
-            // 帧头：3 字节 tag + 3 字节 start code + 2 字节 width + 2 字节 height
-            // 注意:VP8 (lossy) 的宽高是 16 位小端的「实际像素值」(非减一,也非 14 位)。
-            // 之前误用 VP8L 的 14 位掩码 & 0x3fff 会丢弃高位,宽度 >=16384 时解析错误。
-            // 此处直接取 16 位完整值。
-            if payload.len() < 10 {
-                return None;
-            }
-            let w = u16::from_le_bytes([payload[6], payload[7]]) as u32;
-            let h = u16::from_le_bytes([payload[8], payload[9]]) as u32;
-            Some((w, h))
-        }
-        b"VP8L" => {
-            if payload.len() < 5 {
-                return None;
-            }
-            // 字节 1~4：width-1 (14 bit) | height-1 (14 bit)
-            let b0 = payload[1] as u32;
-            let b1 = payload[2] as u32;
-            let b2 = payload[3] as u32;
-            let b3 = payload[4] as u32;
-            let w = (b0 | ((b1 & 0x3f) << 8)) + 1;
-            let h = (((b1 >> 6) & 0x03) | (b2 << 2) | ((b3 & 0x0f) << 10)) + 1;
-            Some((w, h))
-        }
-        b"VP8X" => {
-            if payload.len() < 10 {
-                return None;
-            }
-            // 字节 4~6：24 位 width-1；字节 7~9：24 位 height-1
-            let w = (payload[4] as u32) | ((payload[5] as u32) << 8) | ((payload[6] as u32) << 16);
-            let h = (payload[7] as u32) | ((payload[8] as u32) << 8) | ((payload[9] as u32) << 16);
-            Some((w + 1, h + 1))
-        }
-        _ => None,
-    }
-}
-
-/// Rust 侧用于 row/count 越界估算的「默认假设」帧尺寸。
-/// 注意：这并非强制标准。项目支持任意帧尺寸的外部包(Codex 生成的高清大帧
-/// 尺寸远大于此、列数也非 8)，前端按 manifest 声明的真实 frame 尺寸自适应取帧。
-/// 这里仅用于保守估算行数、以及 clamp_seq 对每行列数做上限保护。
-const FRAME_H: u32 = 208;
-const FRAME_COLS: u32 = 8;
-
-/// 根据精灵图实际尺寸，修正一个帧段的 row/count，避免越界：
-///
-///   - row 超出实际行数 → 返回 None（该动作不可用，应移除）
-///   - count / fps 为 0 → 用兜底值（0 帧或 0 fps 会导致动画卡死/不播放）
-///   - count 超出该行剩余列数 → 截断到可用列数（用该宠物的真实列数，
-///     而非写死的 FRAME_COLS，否则 17 列高清包的帧会被错误截断）
-fn clamp_seq(s: FrameSeqJson, rows: u32, cols: u32) -> Option<FrameSeqJson> {
-    if s.row >= rows {
-        return None;
-    }
-    // 该行最多 cols 帧，count 不应超过
-    let count = if s.count == 0 {
-        cols
-    } else {
-        s.count.min(cols)
-    };
-    if count == 0 {
-        return None;
-    }
-    // fps 下限保护：0 fps 会让 CSS 动画卡在第一帧，给一个合理默认
-    let fps = if s.fps == 0 { 8 } else { s.fps };
-    Some(FrameSeqJson {
-        row: s.row,
-        count,
-        fps,
-    })
-}
-
-fn default_actions() -> std::collections::BTreeMap<String, FrameSeqJson> {
-    let mut m = std::collections::BTreeMap::new();
-    m.insert("wave".into(), seq(3, 4, 10));
-    m.insert("jump".into(), seq(4, 5, 10));
-    m.insert("failed".into(), seq(5, 8, 10));
-    m.insert("waiting".into(), seq(6, 6, 8));
-    m.insert("working".into(), seq(7, 6, 8));
-    m.insert("look".into(), seq(9, 8, 8));
-    // 拖动跑步（与内置宠物一致：row 1 向右跑、row 2 向左跑）
-    m.insert("runningRight".into(), seq(1, 8, 10));
-    m.insert("runningLeft".into(), seq(2, 8, 10));
-    m
-}
-
-/// 极简 base64 编码（标准库实现，避免额外依赖）
-fn base64_encode(data: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    // 每 3 字节编码为 4 字符；不足 3 字节的尾部按 1 组计（等价旧的 (len + 2) / 3）
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
-        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(TABLE[(n >> 18) as usize & 63] as char);
-        out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            TABLE[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            TABLE[n as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    out
-}
-
-/// 极简 base64 解码（返回字节，忽略空白与非法字符）
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    fn val(c: u8) -> i32 {
-        match c {
-            b'A'..=b'Z' => (c - b'A') as i32,
-            b'a'..=b'z' => (c - b'a' + 26) as i32,
-            b'0'..=b'9' => (c - b'0' + 52) as i32,
-            b'+' => 62,
-            b'/' => 63,
-            _ => -1,
-        }
-    }
-    let mut out = Vec::new();
-    let mut acc = 0u32;
-    let mut bits = 0u32;
-    for &b in input.as_bytes() {
-        if b == b'=' || b == b'\n' || b == b'\r' || b == b' ' {
-            continue;
-        }
-        let v = val(b);
-        if v < 0 {
-            return Err("base64 含非法字符".into());
-        }
-        acc = (acc << 6) | v as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    Ok(out)
-}
-
-/// 计算该宠物的单帧几何（PetFrameJson）。
-///
-/// 声明优先：pet.json 显式声明 frame{width,height,cols} 时直接采用，
-/// rows 由精灵图实际高度 / 帧高推导（声明宽度/高度/列数若为 0 则回退到默认值）。
-/// 未声明时回退到默认 192×208 / 8 列，rows 由精灵图实际高度 / 208 推导。
-///
-/// 注意：sheet 实际尺寸只在「解析失败」时才回退（那才是真问题，
-/// 见 build_pet_def 的告警），正常包都能拿到真实尺寸。
-fn compute_frame(raw: &RawPetJson, sheet: Option<(u32, u32)>) -> PetFrameJson {
-    let (sheet_w, sheet_h) = sheet.unwrap_or((192 * 8, 208 * 11));
-
-    let declared = raw.frame.as_ref();
-    // 声明值若为 0（非法）则回退到默认；用 max(1) 避免后续除法除零。
-    let frame_h = declared.map(|f| f.height).unwrap_or(FRAME_H).max(1);
-    let cols = declared.map(|f| f.cols).unwrap_or(FRAME_COLS).max(1);
-
-    // 未声明宽时用「精灵图实际宽 / 列数」反推单帧宽，更贴合真实包。
-    let frame_w = if let Some(f) = declared {
-        if f.width == 0 {
-            sheet_w / cols
-        } else {
-            f.width
-        }
-    } else {
-        sheet_w / cols
-    };
-
-    // rows 由精灵图实际高度 / 帧高得出（frame_h 已 ≥1，无需再判零）
-    let rows = (sheet_h / frame_h).max(1);
-
-    PetFrameJson {
-        width: frame_w,
-        height: frame_h,
-        cols,
-        rows,
-    }
-}
-
-/// 从 pet.json 内容 + 精灵图字节，组装宠物定义。
-///
-/// 关键：外部宠物精灵图行数/列数不统一（标准 11 行 vs 某些包 9 行、列数也非 8）。
-/// 这里解析 webp 实际尺寸，算出真实行/列数，对默认模板的 row/count 做越界修正：
-/// row 越界的动作会被移除（前端不会播放它，避免画布清空导致宠物消失），
-/// count 越界则截断到该行可用列数（用该宠物的真实列数而非写死的 FRAME_COLS）。
-/// 同时产出 per-pet frame 几何（见 compute_frame），让前端正确切帧。
-fn build_pet_def(raw: &RawPetJson, spritesheet_bytes: &[u8]) -> PetDefJson {
-    let sheet = webp_dimensions(spritesheet_bytes);
-    if sheet.is_none() {
-        eprintln!(
-            "[pet_import] 警告(宠物 {}): 无法解析精灵图尺寸(非有效 webp?),按默认 8 列回退处理",
-            raw.id
-        );
-    }
-    let frame = compute_frame(raw, sheet);
-
-    let idle_raw = raw
-        .idle
-        .as_ref()
-        .map(|s| seq(s.row, s.count, s.fps))
-        .unwrap_or_else(|| seq(0, 6, 8));
-    let talk_raw = raw
-        .talk
-        .as_ref()
-        .map(|s| seq(s.row, s.count, s.fps))
-        .unwrap_or_else(|| seq(3, 4, 10));
-    let actions_raw = raw
-        .actions
-        .as_ref()
-        .map(|m| {
-            m.iter()
-                .map(|(k, s)| (k.clone(), seq(s.row, s.count, s.fps)))
-                .collect()
-        })
-        .unwrap_or_else(default_actions);
-
-    // 越界修正：idle/talk 必须有，越界则回退到 row 0（count 用真实列数兜底）
-    let idle =
-        clamp_seq(idle_raw, frame.rows, frame.cols).unwrap_or_else(|| seq(0, frame.cols.min(6), 8));
-    let talk = clamp_seq(talk_raw, frame.rows, frame.cols).unwrap_or_else(|| idle.clone());
-    // actions 逐个修正，越界的直接移除
-    let actions: std::collections::BTreeMap<String, FrameSeqJson> = actions_raw
-        .into_iter()
-        .filter_map(|(k, s)| clamp_seq(s, frame.rows, frame.cols).map(|cs| (k, cs)))
-        .collect();
-
-    PetDefJson {
-        id: raw.id.trim().to_string(),
-        display_name: raw
-            .display_name
-            .clone()
-            .unwrap_or_else(|| raw.id.trim().to_string()),
-        description: raw.description.clone().unwrap_or_default(),
-        spritesheet: format!(
-            "data:image/webp;base64,{}",
-            base64_encode(spritesheet_bytes)
-        ),
-        idle,
-        talk,
-        actions,
-        frame,
-    }
-}
+use crate::domain::pet::codec::base64_decode;
+use crate::domain::pet::model::{build_pet_def, PetDefJson, RawPetJson};
+use crate::domain::pet::validator::safe_join;
 
 /// 外部宠物导入命令：解压 zip 到 app_data_dir/pets/<id>/，返回宠物定义。
 #[tauri::command]
@@ -393,15 +65,10 @@ pub async fn import_pet(app: tauri::AppHandle, base64: String) -> Result<PetDefJ
         if id.is_empty() {
             return Err("pet.json 缺少 id".into());
         }
-        if !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
-            return Err("宠物 id 含非法字符".into());
-        }
+        // id 校验（防目录穿越）→ 拼出宠物目录
+        let target_dir = safe_join(&root, &id).map_err(|e| e.message)?;
 
         // 解压全部条目，记录 webp 字节
-        let target_dir = root.join(&id);
         if target_dir.exists() {
             std::fs::remove_dir_all(&target_dir).map_err(|e| format!("清理旧宠物目录失败: {e}"))?;
         }
@@ -487,17 +154,10 @@ pub async fn delete_imported_pet(app: tauri::AppHandle, id: String) -> Result<()
         .join("pets");
 
     // id 白名单校验（防目录穿越）
-    if id.is_empty()
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err("宠物 id 含非法字符".into());
-    }
+    let target = safe_join(&pets_root, &id).map_err(|e| e.message)?;
     let app_for_emit = app.clone();
 
     let _ = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let target = pets_root.join(&id);
         if target.exists() {
             std::fs::remove_dir_all(&target).map_err(|e| format!("删除宠物目录失败: {e}"))?;
         }
@@ -522,23 +182,16 @@ pub async fn update_imported_pet(
     description: Option<String>,
 ) -> Result<(), String> {
     // id 白名单校验（防目录穿越）
-    if id.is_empty()
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err("宠物 id 含非法字符".into());
-    }
-
     let pets_root = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("获取数据目录失败: {e}"))?
         .join("pets");
+    let target = safe_join(&pets_root, &id).map_err(|e| e.message)?;
     let app_for_emit = app.clone();
 
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let json_path = pets_root.join(&id).join("pet.json");
+        let json_path = target.join("pet.json");
         if !json_path.exists() {
             return Err(format!("宠物不存在: {}", id));
         }
@@ -634,8 +287,7 @@ pub async fn list_imported_pets(app: tauri::AppHandle) -> Result<Vec<PetDefJson>
 // ─────────────────────────────────────────────────────────────
 
 /// awesome-codex-pet 仓库（main 分支）原始内容基地址
-const CODEPET_GITHUB_RAW: &str =
-    "https://raw.githubusercontent.com/legeling/awesome-codex-pet/main";
+const CODEPET_GITHUB_RAW: &str = "https://raw.githubusercontent.com/legeling/awesome-codex-pet/main";
 /// 预览图基地址（codexpet.top 提供，已实测可用；加载失败前端回退文字）
 const CODEPET_PREVIEW_BASE: &str = "https://codexpet.top/assets/previews";
 
@@ -791,13 +443,12 @@ pub async fn download_online_pet(
     slug: String,
 ) -> Result<PetDefJson, String> {
     // id 白名单校验（slug 即本地目录名，防目录穿越）
-    if slug.is_empty()
-        || !slug
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err("宠物 slug 含非法字符".into());
-    }
+    let pets_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取数据目录失败: {e}"))?
+        .join("pets");
+    let target_dir = safe_join(&pets_root, &slug).map_err(|e| e.message)?;
 
     let client = http_client()?;
 
@@ -838,12 +489,6 @@ pub async fn download_online_pet(
         serde_json::from_str(&json_text).map_err(|e| format!("pet.json 解析失败: {e}"))?;
 
     // 组装定义并落盘（含把 webp 写入目录，便于后续 list_imported_pets 复用）
-    let pets_root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("获取数据目录失败: {e}"))?
-        .join("pets");
-    let target_dir = pets_root.join(&slug);
     if target_dir.exists() {
         std::fs::remove_dir_all(&target_dir).map_err(|e| format!("清理旧宠物目录失败: {e}"))?;
     }
@@ -959,160 +604,5 @@ mod tests {
         let a = http_client().unwrap();
         let b = http_client().unwrap();
         assert!(std::ptr::eq(a, b));
-    }
-
-    // ── 外部宠物 per-pet frame 支持（P0-1）──
-
-    /// 构造一个尺寸为 (w, h) 的最小有效 VP8X webp（仅含头部，不含像素），
-    /// 供 build_pet_def 解析实际尺寸用。
-    ///
-    /// 注意：与 webp_dimensions 的实际解析偏移对齐——该函数从 data[20] 起读
-    /// 24 位宽/高（data[16..20] 是它不读的 chunk size 字段），故 width-1 放
-    /// data[20..23]、height-1 放 data[23..26]。
-    fn make_webp(w: u32, h: u32) -> Vec<u8> {
-        let mut v = Vec::new();
-        v.extend_from_slice(b"RIFF");
-        v.extend_from_slice(&(22u32).to_le_bytes());
-        v.extend_from_slice(b"WEBP");
-        v.extend_from_slice(b"VP8X");
-        v.extend_from_slice(&10u32.to_le_bytes()); // data[16..20] chunk size（webp_dims 不读）
-        let w1 = (w - 1).to_le_bytes();
-        let h1 = (h - 1).to_le_bytes();
-        v.push(w1[0]);
-        v.push(w1[1]);
-        v.push(w1[2]); // data[20..23] = width-1
-        v.push(h1[0]);
-        v.push(h1[1]);
-        v.push(h1[2]); // data[23..26] = height-1
-        v.extend_from_slice(&[0u8; 4]); // 补足到 30 字节（满足 data.len() < 30 检查）
-        v
-    }
-
-    fn raw_with_frame(id: &str, frame: Option<RawFrame>) -> RawPetJson {
-        RawPetJson {
-            id: id.to_string(),
-            display_name: None,
-            description: None,
-            idle: None,
-            talk: None,
-            actions: None,
-            frame,
-        }
-    }
-
-    #[test]
-    fn compute_frame_standard_192x208_8cols() {
-        // 验收用例 1：标准包，sheet 1536×2288（8 列 × 11 行）
-        let raw = raw_with_frame(
-            "std",
-            Some(RawFrame {
-                width: 192,
-                height: 208,
-                cols: 8,
-            }),
-        );
-        let f = compute_frame(&raw, Some((1536, 2288)));
-        assert_eq!(
-            f,
-            PetFrameJson {
-                width: 192,
-                height: 208,
-                cols: 8,
-                rows: 11
-            }
-        );
-    }
-
-    #[test]
-    fn compute_frame_nonstandard_256x256_6cols() {
-        // 验收用例 2：非标包，sheet 1536×2816（6 列 × 11 行）
-        let raw = raw_with_frame(
-            "hd",
-            Some(RawFrame {
-                width: 256,
-                height: 256,
-                cols: 6,
-            }),
-        );
-        let f = compute_frame(&raw, Some((1536, 2816)));
-        assert_eq!(
-            f,
-            PetFrameJson {
-                width: 256,
-                height: 256,
-                cols: 6,
-                rows: 11
-            }
-        );
-    }
-
-    #[test]
-    fn compute_frame_declares_width_zero_falls_back_to_sheet() {
-        // 声明宽度为 0（非法）→ 用 sheet 宽 / cols 反推单帧宽
-        let raw = raw_with_frame(
-            "x",
-            Some(RawFrame {
-                width: 0,
-                height: 200,
-                cols: 5,
-            }),
-        );
-        let f = compute_frame(&raw, Some((1000, 2000)));
-        assert_eq!(f.width, 200); // 1000 / 5
-        assert_eq!(f.height, 200);
-        assert_eq!(f.cols, 5);
-        assert_eq!(f.rows, 10); // 2000 / 200
-    }
-
-    #[test]
-    fn compute_frame_undeclared_derives_from_sheet() {
-        // 完全不声明 frame → 默认 192×208/8 列，rows 由 sheet 高 / 208 得出
-        let raw = raw_with_frame("def", None);
-        let f = compute_frame(&raw, Some((1536, 2288)));
-        assert_eq!(f.width, 192); // 1536 / 8
-        assert_eq!(f.height, 208);
-        assert_eq!(f.cols, 8);
-        assert_eq!(f.rows, 11);
-    }
-
-    #[test]
-    fn clamp_seq_uses_real_cols_not_hardcoded() {
-        // 17 列高清包：count 上限应为 17，而非写死的 8（回归 P0-1 关键）
-        let s = seq(0, 20, 10);
-        let c = clamp_seq(s, 11, 17).unwrap();
-        assert_eq!(c.count, 17);
-
-        // 6 列包：count 超过 6 应被截断到 6
-        let c2 = clamp_seq(seq(0, 9, 10), 11, 6).unwrap();
-        assert_eq!(c2.count, 6);
-
-        // 行越界 → None
-        assert!(clamp_seq(seq(99, 4, 10), 11, 8).is_none());
-    }
-
-    #[test]
-    fn build_pet_def_emits_per_pet_frame() {
-        // 端到端：build_pet_def 把 per-pet frame 写进 PetDefJson.frame
-        let raw = raw_with_frame(
-            "e2e",
-            Some(RawFrame {
-                width: 256,
-                height: 256,
-                cols: 6,
-            }),
-        );
-        let sheet = make_webp(1536, 2816);
-        let def = build_pet_def(&raw, &sheet);
-        assert_eq!(
-            def.frame,
-            PetFrameJson {
-                width: 256,
-                height: 256,
-                cols: 6,
-                rows: 11
-            }
-        );
-        // 默认 idle 的 count 应受真实列数限制（6），而非 8
-        assert_eq!(def.idle.count, 6);
     }
 }
