@@ -18,11 +18,11 @@
 - **宠物切换**：内置 3 只（Miku / 龙神丸 / Seedy）+ 本地 zip 导入 / 删除 / 编辑 + 在线画廊下载
 - **专属台词**：每只内置宠物有独立性格的搭话气泡（`src/pets/dialogues.ts`）
 - **像素穿透**：
-  - macOS：NSTimer 每 50ms 轮询鼠标位置，命中宠物 / 气泡矩形则交互，否则 `setIgnoresMouseEvents` 穿透
+  - macOS：NSTimer 每 16ms（约 60fps）轮询鼠标位置，命中宠物 / 气泡矩形则交互，否则 `setIgnoresMouseEvents` 穿透
   - Windows：`SetWindowRgn` 把窗口裁成「宠物 + 气泡」圆角矩形，区域外点击穿透（支持 Per-Monitor DPI）
 - **开机自启**：托盘菜单「开机自启」开关（`CheckMenuItem`，勾选态反映当前状态，切换后自动重建菜单刷新勾选）
   - macOS：Apple 官方 `SMAppService` 登录项（需打包后的 `.app` 生效）
-  - Windows：在用户「启动」文件夹写入 / 删除指向当前 exe 的 `.lnk` 快捷方式（零依赖，手写 Shell Link 二进制，无需 COM / 注册表）
+  - Windows：在 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 写入 / 删除 `PetBuddy` 值（值为当前 exe 完整路径 + `--autostart` 标记，供程序区分「开机自启」与「手动启动」）
 - **通用通知接口**：本地 HTTP 服务（`127.0.0.1:8756`），任意外部应用可发通知（见下文）
 - **外部宠物自适应**：导入时解析精灵图实际尺寸，自动修正越界帧，避免异常布局导致宠物消失
 - **在线画廊**：内置接入 [awesome-codex-pet](https://github.com/legeling/awesome-codex-pet) 索引，可直接浏览 / 下载社区宠物（预览图来自 codexpet.top）
@@ -58,7 +58,13 @@ bash ./scripts/build.sh 0.2.0      # 或手动指定版本号
 - **main**（宠物窗口）：无边框、透明、置顶，右下角常驻，承载 `PetHost` + `SpritePet`；尺寸由 `resize_pet_window`（Rust `pet_window_size`）按当前缩放动态计算（默认 scale=0.7 约 248×295，含 24px 透明缓冲），始终与精灵图渲染尺寸对齐，避免留白错位或被裁剪
 - **settings**（设置窗口）：680×500，居中、默认隐藏；双击宠物或托盘「打开设置」时打开；关闭时隐藏而非销毁，并记住最后拖动位置，下次打开恢复
 
-两个窗口是独立 webview，各自持有独立 store 实例。跨窗口状态（切换宠物 / 缩放 / 显隐）通过 Tauri 事件（`pet-switch` / `pet-scale` / `pet-visible`）广播同步，规避前端 emit 跨窗口不生效的问题。macOS 为纯托盘模式：通过 `tauri.conf.json` 的 `bundle.macOS.infoPlistExtend.LSUIElement=true` 静态声明 Agent/Accessory，dev 与 release 启动即隐藏 Dock 图标，行为一致（不再运行时切换 `setActivationPolicy`，避免 dev/release 表现相反）。
+两个窗口是独立 webview，各自持有独立 store 实例。跨窗口状态（切换宠物 / 缩放 / 显隐）通过 Tauri 事件（`pet-switch` / `pet-scale` / `pet-visible`）广播同步，规避前端 emit 跨窗口不生效的问题。macOS 为纯托盘模式：`tauri.conf.json` 的 `bundle.macOS.infoPlist` 指向 `src-tauri/Info.plist`，其中 `LSUIElement=true` 静态声明为 Agent（不占 Dock、不进 Cmd+Tab）。
+
+此外 `main.rs` 仍会在运行时切换 `setActivationPolicy`，三者分工不同、缺一不可：
+
+- **启动**：显式设为 `Accessory`。因为 `tauri dev` 不读 Info.plist，只靠静态声明会导致 dev 与 release 表现相反。
+- **打开设置窗口**：提升为 `Regular`，让设置窗口出现在 Dock 与 Cmd+Tab，方便用户切回。
+- **关闭设置窗口**：降回 `Accessory`，退出 Dock，回到纯托盘。
 
 ## 通知接口（供外部应用调用）
 
@@ -72,6 +78,17 @@ Content-Type: application/json
   "duration": 4000         // 可选：气泡显示时长(ms)，默认 4000
 }
 ```
+
+`duration` 的取值规则：
+
+| 情况                | 行为                                                      |
+| ------------------- | --------------------------------------------------------- |
+| 省略 / `null`       | 使用默认 4000ms                                           |
+| 非数字、≤ 0、`NaN`  | 回退到默认 4000ms（不会让气泡立刻消失）                   |
+| 正常值（如 `1000`） | 按该值显示                                                |
+| > 60000             | 截断到 60000ms 上限（避免外部脚本传极大值让气泡永久占用） |
+
+多条通知会按到达顺序排队依次播放，不会互相覆盖。
 
 示例（curl）：
 
@@ -130,7 +147,7 @@ src-tauri/                 # Rust 后端（Tauri 2）
     macos_pet.rs           # macOS 像素穿透（NSTimer 50ms 轮询 setIgnoresMouseEvents）
     windows_pet.rs         # Windows 穿透（SetWindowRgn 圆角矩形裁切 + Per-Monitor DPI）
     pet_import.rs          # 外部宠物导入（zip 解压 + webp 尺寸解析 + 越界修正 + 在线画廊）
-    autostart.rs           # 开机自启（macOS SMAppService 登录项 / Windows Startup 文件夹 .lnk）
+    autostart.rs           # 开机自启（macOS SMAppService 登录项 / Windows HKCU Run 注册表键）
     notify_server.rs       # 本地通知 HTTP 服务（127.0.0.1:8756）
   icons/                   # 应用图标 + 托盘图标
 public/pets/               # 内置宠物精灵图资源（miku / ryujinmaru / Seedy）
@@ -171,11 +188,11 @@ pet/                       # 外部宠物 zip 素材（开发用，可导入测�
 
 ## 平台支持
 
-| 功能                  | macOS                     | Windows                              | Linux                   |
-| --------------------- | ------------------------- | ------------------------------------ | ----------------------- |
-| 透明无边框窗口 + 穿透 | ✅（NSTimer 动态切换）    | ✅（SetWindowRgn 裁切）              | ⚠️ 配置已就位，未经实测 |
-| 开机自启              | ✅（SMAppService 登录项） | ✅（Startup 文件夹 `.lnk` 快捷方式） | ❌                      |
-| 在线画廊 / 外部导入   | ✅                        | ✅                                   | ✅                      |
-| 通知 HTTP 接口        | ✅                        | ✅                                   | ✅                      |
+| 功能                  | macOS                     | Windows                 | Linux                   |
+| --------------------- | ------------------------- | ----------------------- | ----------------------- |
+| 透明无边框窗口 + 穿透 | ✅（NSTimer 动态切换）    | ✅（SetWindowRgn 裁切） | ⚠️ 配置已就位，未经实测 |
+| 开机自启              | ✅（SMAppService 登录项） | ✅（HKCU Run 注册表键） | ❌                      |
+| 在线画廊 / 外部导入   | ✅                        | ✅                      | ✅                      |
+| 通知 HTTP 接口        | ✅                        | ✅                      | ✅                      |
 
 > 打包前会自动重新生成托盘图标（见 `scripts/`，无需手动处理）。

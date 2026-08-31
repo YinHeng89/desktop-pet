@@ -33,10 +33,27 @@ const isMac =
   (/Mac|iPhone|iPad|iPod/i.test(navigator.platform) || /Macintosh/i.test(navigator.userAgent))
 
 // ── 通知气泡（接收外部通知）──
+//
+// 时长常量。TODO(phase5)：迁入 shared/config/constants.ts 作为全局唯一真源
+//（届时由 Rust domain 生成，并用契约测试保证两端一致）。
+const DEFAULT_NOTIFY_MS = 4000
+// 上限保护：HTTP 接口的 duration 是任意 u64，若不设上限，外部脚本传一个极大的值
+// 会让宠物永久停在 talk 状态、气泡不再消失。
+const MAX_NOTIFY_MS = 60_000
+
+/** 归一化气泡时长：非法值（非数字 / ≤0）回退默认，超出上限截断。 */
+function normalizeDuration(d: unknown): number {
+  const n = Number(d)
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_NOTIFY_MS
+  return Math.min(n, MAX_NOTIFY_MS)
+}
+
 interface NotifyItem {
   id: number
   text: string
   action?: string
+  /** 气泡显示时长(ms)。未指定时用 DEFAULT_NOTIFY_MS。 */
+  duration?: number
 }
 const currentNotify = ref<NotifyItem | null>(null)
 const notifyQueue: Array<NotifyItem> = []
@@ -54,12 +71,6 @@ let randomTimer: ReturnType<typeof setTimeout> | null = null
 // 宠物动作状态
 const petState = ref<string>('idle')
 const usePet = computed(() => !!currentPet.value && petStore.visible)
-
-// 宠物真实渲染宽度（帧宽 × 缩放），用于锁定气泡容器宽度、稳定尾巴对齐。
-const petWidth = computed(() => (petStore.frame?.width || 192) * petStore.scale)
-const petWidthCss = computed(() => `${petWidth.value}px`)
-// 尾巴对准宠物水平中心：距气泡右边缘 = 宠物半宽。
-const tailRightCss = computed(() => `${petWidth.value / 2}px`)
 
 // 通用：播放一个动作，播完回 idle 再回调 onDone
 function playAction(name: string, durationMs?: number, onDone?: () => void): void {
@@ -119,7 +130,7 @@ function scheduleRandomAction(): void {
 function showNotify(item: NotifyItem): void {
   currentNotify.value = item
   petState.value = 'talk'
-  const dur = 4000
+  const dur = normalizeDuration(item.duration)
   if (notifyTimer) clearTimeout(notifyTimer)
   notifyTimer = setTimeout(() => {
     petState.value = 'idle'
@@ -144,6 +155,7 @@ function enqueueNotify(payload: { text?: string; action?: string; duration?: num
     id: ++notifySeq,
     text,
     action: payload?.action,
+    duration: payload?.duration,
   }
   notifyQueue.push(item)
   // 若指定了动作，先播该动作（优先级最高）；动作播完后再显示气泡，
@@ -492,6 +504,22 @@ function onGlobalMouseUp(): void {
   stopDragging()
 }
 
+// 消费本地通知（测试通知/导入提示）。
+//
+// ⚠️ 必须注册在 <script setup> 顶层，不能放进 async 的 onMounted 里。
+// 原因：onMounted 的回调在 `await` 之后恢复执行时，Vue 的 currentInstance
+// 已被重置为 null，此时创建的 watch 会脱离组件的 effect scope——
+// 组件 unmount 时不会被停止，watcher 永久存活并持续消费 notifyStore.pending，
+// 造成泄漏（HMR / 窗口重建场景下会累积出多个消费者，通知被随机抢走）。
+// 注册在顶层则由组件 scope 托管，随 unmount 自动停止。
+watch(
+  () => notifyStore.pending,
+  () => {
+    const p = consumeNotify()
+    if (p) enqueueNotify(p)
+  },
+)
+
 // 气泡/宠物/缩放/显隐变化时重新上报矩形。
 // 关键：currentPet 异步加载完成后必须重新上报，否则矩形停留在空的初始值，
 // 导致命中判断失效（宠物区域无法交互）。
@@ -604,15 +632,6 @@ onMounted(async () => {
 
   // 启动时按当前缩放设一次窗口尺寸（窗口跟随缩放）
   if (isTauri) void resizePetWindow(petStore.scale)
-
-  // 消费本地通知（测试通知/导入提示）
-  watch(
-    () => notifyStore.pending,
-    () => {
-      const p = consumeNotify()
-      if (p) enqueueNotify(p)
-    },
-  )
 })
 
 onUnmounted(() => {
@@ -629,11 +648,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    v-if="usePet"
-    class="pet-host"
-    :style="{ '--pet-scale': petStore.scale, '--pet-w': petWidthCss, '--tail-right': tailRightCss }"
-  >
+  <div v-if="usePet" class="pet-host" :style="{ '--pet-scale': petStore.scale }">
     <Transition
       name="bubble"
       mode="out-in"

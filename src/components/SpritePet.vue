@@ -145,18 +145,32 @@ watch(
 watch(currentPet, () => {
   loadImage()
 })
+/** 清空画布（不销毁 canvas 元素本身）。 */
+function clearCanvas(): void {
+  const c = canvas.value
+  if (!c) return
+  c.getContext('2d')?.clearRect(0, 0, c.width, c.height)
+}
+
 watch(displayScale, (s) => {
   const c = canvas.value
-  if (c) {
-    c.width = Math.round(frame.value.width * s)
-    c.height = Math.round(frame.value.height * s)
-  }
+  if (!c) return
+  c.width = Math.round(frame.value.width * s)
+  c.height = Math.round(frame.value.height * s)
+  // 给 canvas.width / height 赋值会【清空画布】，必须立即重绘当前帧。
+  // 否则要等到下一个动画间隔（最高 1 / fps 秒）才补上，表现为拖动缩放滑块时
+  // 宠物周期性闪没。
+  const seq = seqFor(props.state)
+  if (seq && imgLoaded) drawFrame(seq.row, frameIdx)
 })
 
 function loadImage(): void {
   const p = pet.value
   if (!p) return
   imgLoaded = false
+  // 切宠物时先清空画布：新图加载完成前（外部宠物是数 MB 的 base64 data URL，
+  // 加载耗时肉眼可见）canvas 上仍留着上一只宠物的最后一帧，表现为「残影」。
+  clearCanvas()
   img.onload = () => {
     imgLoaded = true
     resetAndPlay()

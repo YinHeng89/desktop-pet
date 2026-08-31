@@ -7,6 +7,7 @@
 // 二者由 vitest 在同一模块注册表内加载，因此 canvasDrawCalls 数组在
 // setup 注入的 mock 与用例断言之间共享同一实例。
 
+import { nextTick } from 'vue'
 import { vi } from 'vitest'
 
 export interface CanvasDrawCall {
@@ -51,6 +52,19 @@ export function flushPromises(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0)
   })
+}
+
+/**
+ * 彻底冲刷：微任务 → 宏任务(0ms) → 微任务。
+ *
+ * 比 flushPromises 更强，适用于「被测代码在 async onMounted 内部 await nextTick()
+ * 之后才注册 watcher」这类场景——PetHost.vue 的 notify-pending watch 就是如此，
+ * 只用 nextTick() 无法保证它已注册完毕。
+ */
+export async function flushAll(): Promise<void> {
+  await nextTick()
+  await flushPromises()
+  await nextTick()
 }
 
 /** 构造一个已 resolve 的 Image，用于精灵图加载路径的测试 */
