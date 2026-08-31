@@ -30,7 +30,7 @@ use std::sync::Mutex;
 
 // 可交互矩形（CSS 坐标，相对宠物窗口(main)内容区左上角）：(x, y, w, h)
 // 复用跨平台共享类型,保证与 Windows 端语义一致。
-use crate::geometry::{point_in_rects, Rect};
+use crate::domain::geometry::{point_in_rects, Rect};
 static INTERACTIVE_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 // 前端是否已经上报过矩形。启动初期前端尚未上报时保持窗口可交互，
 // 避免 NSTimer 在矩形为空时把窗口误判为「穿透」。
@@ -92,7 +92,7 @@ fn rects_initialized() -> bool {
 }
 
 /// 判断某点（CSS 坐标，左上原点）是否落在可交互区域内。
-/// 复用 geometry::point_in_rects,与 Windows 端命中语义保持一致（含边界）。
+/// 复用 domain::geometry::point_in_rects,与 Windows 端命中语义保持一致（含边界）。
 #[allow(dead_code)]
 fn hit_interactive(x: f64, y: f64) -> bool {
     let g = INTERACTIVE_RECTS.lock().ok();

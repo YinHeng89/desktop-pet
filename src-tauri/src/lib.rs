@@ -5,7 +5,7 @@
 // 也是 Tauri 官方推荐的「lib + bin」结构。
 
 pub mod autostart;
-pub mod geometry;
+pub mod domain;
 pub mod interactive;
 pub mod macos_pet;
 pub mod notify_server;
@@ -66,15 +66,15 @@ fn broadcast_event(app: tauri::AppHandle, event: String, payload: Option<serde_j
 
 /// 按宠物缩放比例重设 main 窗口尺寸。
 /// 缩放变化时调用：窗口跟随宠物一起缩放，保证气泡+宠物不被裁剪。
-/// scale 范围 0.5~1.3（与 geometry::MIN_SCALE / MAX_SCALE 及前端一致）；
+/// scale 范围 0.5~1.3（与 domain::geometry::MIN_SCALE / MAX_SCALE 及前端一致）；
 /// 宠物帧 192×208，窗口 = 气泡区 + 宠物区 + 留白。
 ///
 /// 按 scale 计算 main 宠物窗口的逻辑尺寸（宽×高，含 24px 缓冲）。
 /// scale 范围与前端 MIN_SCALE(0.5)~MAX_SCALE(1.3) 对齐，避免 Rust 与前端口径分裂
 /// 导致窗口尺寸和精灵图渲染尺寸不一致（宠物浮在窗口偏左上、右下角留白）。
-/// 统一使用 geometry::clamp_scale,保证与前端及 Windows 端同一份规则。
+/// 统一使用 domain::geometry::clamp_scale,保证与前端及 Windows 端同一份规则。
 fn pet_window_size(scale: f64) -> (f64, f64) {
-    let scale = geometry::clamp_scale(scale);
+    let scale = domain::geometry::clamp_scale(scale);
     let pet_w = (192.0 * scale).round();
     let pet_h = (208.0 * scale).round();
     let bubble_h = (156.0 * scale).round();
@@ -97,7 +97,7 @@ fn resize_pet_window(app: tauri::AppHandle, scale: f64) {
     let Some(w) = app.get_webview_window("main") else {
         return;
     };
-    let scale = geometry::clamp_scale(scale);
+    let scale = domain::geometry::clamp_scale(scale);
 
     let (ww, wh) = pet_window_size(scale);
 

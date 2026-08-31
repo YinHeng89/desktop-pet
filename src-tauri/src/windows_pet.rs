@@ -28,7 +28,7 @@ use tauri::Manager;
 
 // 可交互矩形(CSS 逻辑像素,相对窗口内容区/视口左上角):(x, y, w, h)
 // 复用跨平台共享类型,保证与 macOS 端语义一致。
-use crate::geometry::Rect;
+use crate::domain::geometry::Rect;
 static HIT_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 // 是否已初始化(前端上报过矩形)。未初始化时保持整窗可交互。
 static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
@@ -247,7 +247,7 @@ pub fn apply_hit_rects(hwnd: isize) -> bool {
 
     // 复用跨平台纯函数把 CSS 逻辑矩形按 DPI scale 换算成物理像素矩形,
     // 保证与 macOS 端坐标换算口径一致(消除两份独立实现)。
-    let physical = crate::geometry::rects_to_logical_physical(&rects, scale);
+    let physical = crate::domain::geometry::rects_to_logical_physical(&rects, scale);
 
     // 为每个矩形生成带圆角的 HRGN 并合并(RGN_OR = 并集)。
     // HRGN 在 windows-sys 0.52 即 isize;0 表示空。

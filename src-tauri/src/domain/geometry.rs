@@ -27,9 +27,14 @@ pub fn clamp_scale(scale: f64) -> f64 {
 /// 判断点 (px, py) 是否落在任一矩形内(含边界)。
 /// macOS 的 hit_interactive 与 Windows 的 rect 遍历原本各写一份,现统一为此函数,
 /// 保证两端命中语义完全一致。
+///
+/// 矩形按 `(x, y, w, h)` 解释，`w`/`h` 可为负（表示矩形向左/向上延伸）；
+/// 这里统一按真实包围盒 `[min(x, x+w), max(x, x+w)]` 判断，与符号无关。
 pub fn point_in_rects(rects: &[Rect], px: f64, py: f64) -> bool {
     for &(x, y, w, h) in rects {
-        if px >= x && px <= x + w && py >= y && py <= y + h {
+        let (x0, x1) = if w >= 0.0 { (x, x + w) } else { (x + w, x) };
+        let (y0, y1) = if h >= 0.0 { (y, y + h) } else { (y + h, y) };
+        if px >= x0 && px <= x1 && py >= y0 && py <= y1 {
             return true;
         }
     }
@@ -65,6 +70,16 @@ mod tests {
     }
 
     #[test]
+    fn clamp_scale_nan_passthrough() {
+        // NaN 与任意值比较恒为 false，应原样返回（不 panic、不掉到边界）
+        let r = clamp_scale(f64::NAN);
+        assert!(r.is_nan());
+        // inf 应被夹到边界
+        assert_eq!(clamp_scale(f64::INFINITY), MAX_SCALE);
+        assert_eq!(clamp_scale(f64::NEG_INFINITY), MIN_SCALE);
+    }
+
+    #[test]
     fn point_in_rects_basic() {
         let rects = vec![(0.0, 0.0, 100.0, 50.0), (200.0, 0.0, 50.0, 50.0)];
         assert!(point_in_rects(&rects, 10.0, 10.0));
@@ -78,11 +93,27 @@ mod tests {
     }
 
     #[test]
+    fn point_in_rects_negative_dims_and_overlap() {
+        // 负宽高矩形：取绝对值后仍应正确命中
+        let rects = vec![(-10.0, -10.0, -20.0, -20.0)];
+        assert!(point_in_rects(&rects, -15.0, -15.0));
+        // 重叠矩形（两个矩形部分重叠）：点落在任一内即命中
+        let overlap = vec![(0.0, 0.0, 30.0, 30.0), (20.0, 20.0, 30.0, 30.0)];
+        assert!(point_in_rects(&overlap, 25.0, 25.0));
+        assert!(!point_in_rects(&overlap, 100.0, 100.0));
+    }
+
+    #[test]
     fn rects_to_logical_physical_scales() {
         let rects = vec![(10.0, 20.0, 30.0, 40.0)];
         let out = rects_to_logical_physical(&rects, 2.0);
         assert_eq!(out[0], (20.0, 40.0, 60.0, 80.0));
         // scale=1 不变
         assert_eq!(rects_to_logical_physical(&rects, 1.0), rects);
+        // scale=0 全部归零
+        assert_eq!(
+            rects_to_logical_physical(&rects, 0.0),
+            vec![(0.0, 0.0, 0.0, 0.0)]
+        );
     }
 }

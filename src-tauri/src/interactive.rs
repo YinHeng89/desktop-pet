@@ -7,7 +7,7 @@
 // 内部按 #[cfg] 分派到平台模块的 store_* 实现;非 mac/win 平台(Linux)目前无局部
 // 穿透,直接 no-op。
 
-use crate::geometry::Rect;
+use crate::domain::geometry::Rect;
 
 #[tauri::command]
 pub fn update_interactive_rects(rects: Vec<Rect>) {
