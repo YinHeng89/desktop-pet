@@ -112,7 +112,7 @@ mod macos_impl {
     use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Method, Sel};
     use objc2::{class, define_class, msg_send, sel, ClassType};
     use objc2_foundation::{NSObject, NSPoint, NSRect};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard};
     use tauri::{Emitter, Manager};
 
     // 存宠物窗口(main)的 NSWindow 指针（usize 跨线程传递，但所有 objc 调用都在主线程）。
@@ -153,6 +153,173 @@ mod macos_impl {
         }
     }
 
+    /// 取锁；锁中毒时打印并返回 None，避免在 ObjC 回调里 panic。
+    ///
+    /// 背景：tick 是 NSTimer 的 ObjC 回调（`extern "C-unwind"`）。
+    /// panic 穿越 ObjC 栈帧时（ObjC 不是 unwind-safe）大概率直接 abort 整个进程，
+    /// 而不是普通的线程 panic。而 tick 每 16ms 执行一次——
+    /// 一旦某个锁中毒，`unwrap()` 会在下一个 tick 立刻二次 panic，
+    /// 使 App 进入「必崩」状态。因此这里选择跳过本次 tick 而非传播 panic。
+    fn lock_ok<T>(m: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+        match m.lock() {
+            Ok(g) => Some(g),
+            Err(e) => {
+                eprintln!("[macos_pet] 检测到锁中毒，跳过本次 tick: {e}");
+                None
+            }
+        }
+    }
+
+    /// tick 的实际逻辑（与 catch_unwind 包装分离，便于阅读）。
+    ///
+    /// 返回 `Option<()>`：任一互斥锁中毒即以 None 提前返回（等价于跳过本次 tick）。
+    ///
+    /// # Safety
+    /// 内部全部是 objc 消息发送与原始指针解引用，调用方需保证
+    /// NS_WINDOW_PTR 指向的 NSWindow 仍然存活。
+    unsafe fn tick_inner() -> Option<()> {
+        let window_ptr = *lock_ok(&NS_WINDOW_PTR)?;
+        if window_ptr == 0 {
+            return Some(());
+        }
+        let window = window_ptr as *mut AnyObject;
+
+        // 取出 AppHandle 的克隆，避免在 emit 期间长时间持有锁。
+        let app = lock_ok(&APP_HANDLE)?.clone();
+
+        // 全局鼠标位置（屏幕坐标，左下原点）
+        let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+        // 宠物窗口(main) frame（屏幕坐标，左下原点）
+        let frame: NSRect = msg_send![window, frame];
+
+        // ── 性能优化：输入未变化时短路 ──
+        // 拖拽进行中必须每帧跑(跟随鼠标)，不短路。
+        // 否则仅当「鼠标位置变化」或「窗口 frame 变化」或「rects 刚更新」
+        // 才继续处理；三者都未变则直接返回，跳过后续所有 objc 调用与重算
+        // (尤其是 setIgnoresMouseEvents: 的属性重算与 hover 锁竞争)，
+        // 让宠物静止时进程可休眠，降低常驻 CPU 占用。
+        let drag_active = *lock_ok(&DRAG_ACTIVE)?;
+        if !drag_active {
+            let rects_dirty = {
+                let mut d = lock_ok(&RECTS_DIRTY)?;
+                let v = *d;
+                if v {
+                    *d = false; // 消费一次,下次恢复按鼠标/窗口变化判断
+                }
+                v
+            };
+            if !rects_dirty {
+                let last_m = *lock_ok(&LAST_MOUSE)?;
+                let last_f = *lock_ok(&LAST_FRAME_ORIGIN)?;
+                let mouse_same =
+                    (mouse.x - last_m.x).abs() < 0.5 && (mouse.y - last_m.y).abs() < 0.5;
+                let frame_same = (frame.origin.x - last_f.x).abs() < 0.5
+                    && (frame.origin.y - last_f.y).abs() < 0.5;
+                if mouse_same && frame_same {
+                    // 无任何输入变化:跳过本次 tick,不做穿透/hover/拖拽处理
+                    return Some(());
+                }
+            }
+        }
+        // 记录当前输入,供下次比对(无论是否短路都更新,保证脏 rects 消费后
+        // 下一次能用真实值判断)
+        *lock_ok(&LAST_MOUSE)? = mouse;
+        *lock_ok(&LAST_FRAME_ORIGIN)? = frame.origin;
+
+        // 鼠标在窗口内的位置，转「左上原点」CSS 坐标（与前端对齐）：
+        let wx = mouse.x - frame.origin.x;
+        let wy = frame.size.height - (mouse.y - frame.origin.y);
+
+        // 是否落在可交互区域（宠物 / 气泡）。
+        let over = rects_initialized() && hit_interactive(wx, wy);
+
+        // ── 1) 动态穿透：保留原有逻辑 ──
+        // 前端尚未上报矩形（启动初期）→ 保持可交互，避免误穿透；
+        // 已初始化 → 按命中判断（命中可交互，未命中穿透）。
+        let should_ignore = if rects_initialized() { !over } else { false };
+        let _: () = msg_send![window, setIgnoresMouseEvents: should_ignore];
+
+        // ── 2) hover 桥接：命中状态变化时 emit pet-hover ──
+        {
+            let mut prev = lock_ok(&PREV_OVER)?;
+            if *prev != Some(over) {
+                *prev = Some(over);
+                if let Some(a) = app.as_ref() {
+                    let _ = a.emit("pet-hover", over);
+                }
+            }
+        }
+
+        // ── 3) 原生 drag：用全局鼠标按键状态 + setFrameOrigin 移动窗口 ──
+        // NSEvent::pressedMouseButtons()（bit0=左键）在 App 非激活时也能读取，
+        // 不依赖 WebView 是否收到 mousedown，因此「第一次按下」即可拖拽。
+        {
+            let buttons: usize = msg_send![class!(NSEvent), pressedMouseButtons];
+            let left_down = (buttons & 1) != 0;
+
+            let mut active = lock_ok(&DRAG_ACTIVE)?;
+            let mut armed = lock_ok(&DRAG_ARMED)?;
+            let mut offset = lock_ok(&DRAG_OFFSET)?;
+            let mut press = lock_ok(&DRAG_PRESS)?;
+            let mut dir = lock_ok(&DRAG_DIR)?;
+
+            if left_down {
+                if *active {
+                    // 已在拖拽：窗口跟随鼠标（保持按下时的偏移）
+                    let o = NSPoint {
+                        x: mouse.x + offset.0,
+                        y: mouse.y + offset.1,
+                    };
+                    let _: () = msg_send![window, setFrameOrigin: o];
+                    // 方向按水平位移判定，变化时上报一次
+                    let d: i8 = if mouse.x < press.0 { -1 } else { 1 };
+                    if *dir != Some(d) {
+                        *dir = Some(d);
+                        if let Some(a) = app.as_ref() {
+                            let _ = a.emit("pet-drag", if d < 0 { "left" } else { "right" });
+                        }
+                    }
+                } else if *armed {
+                    // 已按下但尚未超过阈值：位移 >3px 才视为真拖拽（否则是单击）
+                    let dx = mouse.x - press.0;
+                    let dy = mouse.y - press.1;
+                    if dx * dx + dy * dy > 9.0 {
+                        *active = true;
+                        let o = NSPoint {
+                            x: mouse.x + offset.0,
+                            y: mouse.y + offset.1,
+                        };
+                        let _: () = msg_send![window, setFrameOrigin: o];
+                        let d: i8 = if dx < 0.0 { -1 } else { 1 };
+                        *dir = Some(d);
+                        if let Some(a) = app.as_ref() {
+                            let _ = a.emit("pet-drag-start", true);
+                            let _ = a.emit("pet-drag", if d < 0 { "left" } else { "right" });
+                        }
+                    }
+                } else if over {
+                    // 在可交互区域按下：记录偏移与按下位置，进入 armed 等待移动
+                    let f: NSRect = msg_send![window, frame];
+                    *offset = (f.origin.x - mouse.x, f.origin.y - mouse.y);
+                    *press = (mouse.x, mouse.y);
+                    *armed = true;
+                    *dir = None;
+                }
+            } else if *active || *armed {
+                // 松开左键：结束拖拽
+                if *active {
+                    if let Some(a) = app.as_ref() {
+                        let _ = a.emit("pet-drag-end", true);
+                    }
+                }
+                *active = false;
+                *armed = false;
+                *dir = None;
+            }
+        }
+        Some(())
+    }
+
     // 定义一个 NSObject 子类作为 NSTimer 的 target，带一个 tick 方法。
     define_class!(
         #[unsafe(super(NSObject))]
@@ -163,151 +330,18 @@ mod macos_impl {
             // NSTimer 回调：每 16ms 在主线程执行一次（穿透 + hover + drag 共用）。
             #[unsafe(method(tick:))]
             fn tick(&self, _timer: *mut AnyObject) {
-                unsafe {
-                    let window_ptr = match NS_WINDOW_PTR.lock() {
-                        Ok(g) => *g,
-                        Err(_) => 0,
-                    };
-                    if window_ptr == 0 {
-                        return;
-                    }
-                    let window = window_ptr as *mut AnyObject;
-
-                    // 取出 AppHandle 的克隆，避免在 emit 期间长时间持有锁。
-                    let app = APP_HANDLE.lock().unwrap().clone();
-
-                    // 全局鼠标位置（屏幕坐标，左下原点）
-                    let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
-                    // 宠物窗口(main) frame（屏幕坐标，左下原点）
-                    let frame: NSRect = msg_send![window, frame];
-
-                    // ── 性能优化：输入未变化时短路 ──
-                    // 拖拽进行中必须每帧跑(跟随鼠标)，不短路。
-                    // 否则仅当「鼠标位置变化」或「窗口 frame 变化」或「rects 刚更新」
-                    // 才继续处理；三者都未变则直接返回，跳过后续所有 objc 调用与重算
-                    // (尤其是 setIgnoresMouseEvents: 的属性重算与 hover 锁竞争)，
-                    // 让宠物静止时进程可休眠，降低常驻 CPU 占用。
-                    let drag_active = *DRAG_ACTIVE.lock().unwrap();
-                    if !drag_active {
-                        let rects_dirty = {
-                            let mut d = RECTS_DIRTY.lock().unwrap();
-                            let v = *d;
-                            if v {
-                                *d = false; // 消费一次,下次恢复按鼠标/窗口变化判断
-                            }
-                            v
-                        };
-                        if !rects_dirty {
-                            let last_m = *LAST_MOUSE.lock().unwrap();
-                            let last_f = *LAST_FRAME_ORIGIN.lock().unwrap();
-                            let mouse_same = (mouse.x - last_m.x).abs() < 0.5
-                                && (mouse.y - last_m.y).abs() < 0.5;
-                            let frame_same = (frame.origin.x - last_f.x).abs() < 0.5
-                                && (frame.origin.y - last_f.y).abs() < 0.5;
-                            if mouse_same && frame_same {
-                                // 无任何输入变化:跳过本次 tick,不做穿透/hover/拖拽处理
-                                return;
-                            }
-                        }
-                    }
-                    // 记录当前输入,供下次比对(无论是否短路都更新,保证脏 rects 消费后
-                    // 下一次能用真实值判断)
-                    *LAST_MOUSE.lock().unwrap() = mouse;
-                    *LAST_FRAME_ORIGIN.lock().unwrap() = frame.origin;
-
-                    // 鼠标在窗口内的位置，转「左上原点」CSS 坐标（与前端对齐）：
-                    let wx = mouse.x - frame.origin.x;
-                    let wy = frame.size.height - (mouse.y - frame.origin.y);
-
-                    // 是否落在可交互区域（宠物 / 气泡）。
-                    let over = rects_initialized() && hit_interactive(wx, wy);
-
-                    // ── 1) 动态穿透：保留原有逻辑 ──
-                    // 前端尚未上报矩形（启动初期）→ 保持可交互，避免误穿透；
-                    // 已初始化 → 按命中判断（命中可交互，未命中穿透）。
-                    let should_ignore = if rects_initialized() { !over } else { false };
-                    let _: () = msg_send![window, setIgnoresMouseEvents: should_ignore];
-
-                    // ── 2) hover 桥接：命中状态变化时 emit pet-hover ──
-                    {
-                        let mut prev = PREV_OVER.lock().unwrap();
-                        if *prev != Some(over) {
-                            *prev = Some(over);
-                            if let Some(a) = app.as_ref() {
-                                let _ = a.emit("pet-hover", over);
-                            }
-                        }
-                    }
-
-                    // ── 3) 原生 drag：用全局鼠标按键状态 + setFrameOrigin 移动窗口 ──
-                    // NSEvent::pressedMouseButtons()（bit0=左键）在 App 非激活时也能读取，
-                    // 不依赖 WebView 是否收到 mousedown，因此「第一次按下」即可拖拽。
-                    {
-                        let buttons: usize = msg_send![class!(NSEvent), pressedMouseButtons];
-                        let left_down = (buttons & 1) != 0;
-
-                        let mut active = DRAG_ACTIVE.lock().unwrap();
-                        let mut armed = DRAG_ARMED.lock().unwrap();
-                        let mut offset = DRAG_OFFSET.lock().unwrap();
-                        let mut press = DRAG_PRESS.lock().unwrap();
-                        let mut dir = DRAG_DIR.lock().unwrap();
-
-                        if left_down {
-                            if *active {
-                                // 已在拖拽：窗口跟随鼠标（保持按下时的偏移）
-                                let o = NSPoint {
-                                    x: mouse.x + offset.0,
-                                    y: mouse.y + offset.1,
-                                };
-                                let _: () = msg_send![window, setFrameOrigin: o];
-                                // 方向按水平位移判定，变化时上报一次
-                                let d: i8 = if mouse.x < press.0 { -1 } else { 1 };
-                                if *dir != Some(d) {
-                                    *dir = Some(d);
-                                    if let Some(a) = app.as_ref() {
-                                        let _ =
-                                            a.emit("pet-drag", if d < 0 { "left" } else { "right" });
-                                    }
-                                }
-                            } else if *armed {
-                                // 已按下但尚未超过阈值：位移 >3px 才视为真拖拽（否则是单击）
-                                let dx = mouse.x - press.0;
-                                let dy = mouse.y - press.1;
-                                if dx * dx + dy * dy > 9.0 {
-                                    *active = true;
-                                    let o = NSPoint {
-                                        x: mouse.x + offset.0,
-                                        y: mouse.y + offset.1,
-                                    };
-                                    let _: () = msg_send![window, setFrameOrigin: o];
-                                    let d: i8 = if dx < 0.0 { -1 } else { 1 };
-                                    *dir = Some(d);
-                                    if let Some(a) = app.as_ref() {
-                                        let _ = a.emit("pet-drag-start", true);
-                                        let _ =
-                                            a.emit("pet-drag", if d < 0 { "left" } else { "right" });
-                                    }
-                                }
-                            } else if over {
-                                // 在可交互区域按下：记录偏移与按下位置，进入 armed 等待移动
-                                let f: NSRect = msg_send![window, frame];
-                                *offset = (f.origin.x - mouse.x, f.origin.y - mouse.y);
-                                *press = (mouse.x, mouse.y);
-                                *armed = true;
-                                *dir = None;
-                            }
-                        } else if *active || *armed {
-                            // 松开左键：结束拖拽
-                            if *active {
-                                if let Some(a) = app.as_ref() {
-                                    let _ = a.emit("pet-drag-end", true);
-                                }
-                            }
-                            *active = false;
-                            *armed = false;
-                            *dir = None;
-                        }
-                    }
+                // ⚠️ NSTimer 回调运行在 ObjC 栈帧上，panic 无法安全 unwind 过去，
+                // 会直接 abort 整个进程。而 tick 每 16ms 执行一次，
+                // 一旦某次 panic 会让 App 变成「必崩」状态，故整体包 catch_unwind。
+                //
+                // AssertUnwindSafe 是必需的：闭包捕获了 &self，编译器无法证明其
+                // unwind 安全性；这里的状态都是 Mutex 包裹的独立静态量，
+                // panic 后不会留下不一致的可观察状态。
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                    tick_inner();
+                }));
+                if result.is_err() {
+                    eprintln!("[macos_pet] tick 发生 panic，已捕获以避免进程 abort");
                 }
             }
         }
@@ -440,6 +474,30 @@ mod macos_impl {
             ];
         }
         true
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn lock_ok_returns_guard_when_unpoisoned() {
+            let m: Mutex<i32> = Mutex::new(7);
+            let g = lock_ok(&m).expect("未中毒时应正常取锁");
+            assert_eq!(*g, 7);
+        }
+
+        #[test]
+        fn lock_ok_returns_none_when_poisoned() {
+            // 在持有锁期间 panic 使 Mutex 中毒；catch_unwind 只阻止进程 abort，
+            // 不会清除中毒标志。lock_ok 必须返回 None 而非向上 panic。
+            let m: Mutex<i32> = Mutex::new(0);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _g = m.lock().unwrap();
+                panic!("poison");
+            }));
+            assert!(lock_ok(&m).is_none());
+        }
     }
 }
 
