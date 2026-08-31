@@ -30,7 +30,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
-use crate::domain::notify::http_request::{content_length, find_subslice, header_value, is_allowed_host};
+use crate::domain::notify::http_request::{
+    content_length, find_subslice, header_value, is_allowed_host,
+};
 
 const PORT: u16 = 8756;
 /// 通知文本字数硬上限（中文按 1 字符计），超出拒绝并返回错误提示。

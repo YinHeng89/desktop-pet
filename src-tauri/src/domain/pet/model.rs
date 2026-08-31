@@ -231,7 +231,7 @@ mod tests {
         v.push(h1[0]);
         v.push(h1[1]);
         v.push(h1[2]); // data[27..30] = height-1（payload[7..10]）
-        // 总长 30 字节，恰好满足 data.len() < 30 的边界检查
+                       // 总长 30 字节，恰好满足 data.len() < 30 的边界检查
         v
     }
 

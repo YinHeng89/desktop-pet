@@ -322,7 +322,10 @@ fn http_client() -> Result<&'static reqwest::Client, String> {
 /// 浏览在线宠物：拉取 awesome-codex-pet 的 pets.json 索引并返回列表。
 #[tauri::command]
 pub async fn browse_online_pets() -> Result<Vec<OnlinePetMeta>, String> {
-    let url = format!("{}/pets.json", crate::domain::gallery::index::CODEPET_GITHUB_RAW);
+    let url = format!(
+        "{}/pets.json",
+        crate::domain::gallery::index::CODEPET_GITHUB_RAW
+    );
     let client = http_client()?;
 
     let resp = client

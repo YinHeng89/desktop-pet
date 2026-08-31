@@ -53,7 +53,10 @@ impl AppError {
 
     /// 宠物 id 非法（空或含非白名单字符）。
     pub fn invalid_pet_id(id: &str) -> Self {
-        AppError::new(ErrorCode::InvalidPetId, format!("宠物 id 含非法字符或为空: {id}"))
+        AppError::new(
+            ErrorCode::InvalidPetId,
+            format!("宠物 id 含非法字符或为空: {id}"),
+        )
     }
 
     /// 路径逃逸出允许目录（目录穿越）。

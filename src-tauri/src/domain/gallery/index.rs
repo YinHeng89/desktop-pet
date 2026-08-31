@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// awesome-codex-pet 仓库原始索引（pets.json）的 GitHub raw 基址。
-pub const CODEPET_GITHUB_RAW: &str = "https://raw.githubusercontent.com/legeling/awesome-codex-pet/main";
+pub const CODEPET_GITHUB_RAW: &str =
+    "https://raw.githubusercontent.com/legeling/awesome-codex-pet/main";
 /// codexpet.top 预览图基址。
 pub const CODEPET_PREVIEW_BASE: &str = "https://codexpet.top/assets/previews";
 

@@ -10,7 +10,10 @@ use crate::error::AppError;
 /// 这是所有外部宠物文件系统操作的入口门禁：id 来自不受信任的 pet.json，
 /// 必须先用此函数过一道，再拼路径，杜绝任意路径穿越。
 pub fn is_valid_pet_id(id: &str) -> bool {
-    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// 把 root 与 id 拼接为子路径，并校验 id 合法（且结果不会逃逸出 root）。
@@ -96,7 +99,16 @@ mod tests {
         assert_eq!(r.fps, 12);
 
         // row 越界 → 移除（rows=1 时只有 row 0 合法）
-        assert!(clamp_seq(FrameSeqJson { row: 99, count: 4, fps: 10 }, 1, 17).is_none());
+        assert!(clamp_seq(
+            FrameSeqJson {
+                row: 99,
+                count: 4,
+                fps: 10
+            },
+            1,
+            17
+        )
+        .is_none());
 
         // fps=0 → 兜底 8
         let s0 = FrameSeqJson {
