@@ -672,8 +672,33 @@ pub async fn browse_online_pets() -> Result<Vec<OnlinePetMeta>, String> {
     Ok(out)
 }
 
+/// 把 pet.json 的 `id` 统一改写为 slug，返回规范化后的 JSON 文本。
+///
+/// 纯函数（不碰文件系统、不做网络请求），便于单测。
+///
+/// 之所以必须改写并**落盘**：本地目录名固定用 slug，而 `delete_imported_pet` /
+/// `update_imported_pet` 是用「宠物 id」拼目录路径的。若保留远程 pet.json 里的 id
+/// （完全可能与 slug 不同），下次启动 `list_imported_pets` 读到的仍是远程 id，
+/// 删除 / 编辑就会去拼一个不存在的目录——而因为代码里有 `if target.exists()` 保护，
+/// 表现为**静默成功却什么都没做**。
+fn normalize_pet_id_json(json_text: &str, slug: &str) -> Result<String, String> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(json_text).map_err(|e| format!("pet.json 解析失败: {e}"))?;
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| "pet.json 根节点不是 JSON 对象".to_string())?;
+    obj.insert(
+        "id".to_string(),
+        serde_json::Value::String(slug.to_string()),
+    );
+    serde_json::to_string_pretty(&value).map_err(|e| format!("pet.json 序列化失败: {e}"))
+}
+
 /// 下载在线宠物：拉取 <slug> 目录下的 pet.json + spritesheet.webp，
 /// 复用内置的 build_pet_def 组装，写入 app_data_dir/pets/<slug>/，并刷新托盘菜单。
+///
+/// 落盘前会把 pet.json 的 id 归一化为 slug（见 normalize_pet_id_json），
+/// 保证「宠物 id == 本地目录名」，使后续的删除 / 编辑命令能正确定位目录。
 #[tauri::command]
 pub async fn download_online_pet(
     app: tauri::AppHandle,
@@ -722,14 +747,12 @@ pub async fn download_online_pet(
         .await
         .map_err(|e| format!("读取精灵图字节失败: {e}"))?;
 
+    // 归一化 id 为 slug，并**写回磁盘**（见 normalize_pet_id_json 的说明）。
+    // 修复前只改内存中的 raw、落盘的仍是原文，导致重启后 id 又变回远程值。
+    let json_text = normalize_pet_id_json(&json_text, &slug)?;
+
     let raw: RawPetJson =
         serde_json::from_str(&json_text).map_err(|e| format!("pet.json 解析失败: {e}"))?;
-
-    // 用 slug 作为本地 id（保证唯一，避免与远程 id 命名冲突）
-    let mut raw = raw;
-    if raw.id.trim().is_empty() {
-        raw.id = slug.clone();
-    }
 
     // 组装定义并落盘（含把 webp 写入目录，便于后续 list_imported_pets 复用）
     let pets_root = app
@@ -753,4 +776,94 @@ pub async fn download_online_pet(
     let _ = app.emit("pet-pets-changed", ());
 
     Ok(def)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── normalize_pet_id_json ──
+    // 覆盖 P0-2 的回归：目录名用 slug、id 用远程 pet.json 的 id，
+    // 二者不同时删除 / 编辑会静默失效。
+
+    fn id_of(json: &str) -> String {
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        v["id"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn normalize_replaces_upstream_id_with_slug() {
+        let out = normalize_pet_id_json(
+            r#"{"id":"upstream-name","displayName":"X","description":"d"}"#,
+            "the--slug",
+        )
+        .unwrap();
+
+        assert_eq!(id_of(&out), "the--slug");
+        // 其余字段必须原样保留
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["displayName"], "X");
+        assert_eq!(v["description"], "d");
+    }
+
+    #[test]
+    fn normalize_fills_empty_id() {
+        let out = normalize_pet_id_json(r#"{"id":"","displayName":"Y"}"#, "s1").unwrap();
+        assert_eq!(id_of(&out), "s1");
+    }
+
+    #[test]
+    fn normalize_adds_missing_id() {
+        let out = normalize_pet_id_json(r#"{"displayName":"Z"}"#, "s2").unwrap();
+        assert_eq!(id_of(&out), "s2");
+
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["displayName"], "Z");
+    }
+
+    #[test]
+    fn normalize_preserves_unknown_and_nested_fields() {
+        let out = normalize_pet_id_json(r#"{"id":"a","custom":{"nested":[1,2]}}"#, "s3").unwrap();
+
+        assert_eq!(id_of(&out), "s3");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["custom"]["nested"][1], 2);
+    }
+
+    #[test]
+    fn normalize_rejects_invalid_json() {
+        assert!(normalize_pet_id_json("not json", "s").is_err());
+        assert!(normalize_pet_id_json("", "s").is_err());
+    }
+
+    #[test]
+    fn normalize_rejects_non_object_root() {
+        assert!(normalize_pet_id_json("[1,2,3]", "s").is_err());
+        assert!(normalize_pet_id_json("\"str\"", "s").is_err());
+        assert!(normalize_pet_id_json("42", "s").is_err());
+    }
+
+    #[test]
+    fn normalized_json_is_parseable_as_raw_pet_json() {
+        // 关键回归：落盘的文本必须能被 RawPetJson 解析，
+        // 否则重启后 list_imported_pets 会静默跳过这只宠物。
+        let out =
+            normalize_pet_id_json(r#"{"id":"upstream","displayName":"N"}"#, "the-slug").unwrap();
+
+        let raw: RawPetJson = serde_json::from_str(&out).unwrap();
+        assert_eq!(raw.id, "the-slug");
+        assert_eq!(raw.display_name.as_deref(), Some("N"));
+    }
+
+    #[test]
+    fn normalized_id_matches_local_dir_name_contract() {
+        // 「id == 目录名」这条契约由 delete_imported_pet / update_imported_pet 依赖，
+        // 这里把契约显式断言下来，避免将来有人改回「用远程 id」。
+        let slug = "firefly--lingxiaotian";
+        let out = normalize_pet_id_json(r#"{"id":"totally-different"}"#, slug).unwrap();
+
+        let raw: RawPetJson = serde_json::from_str(&out).unwrap();
+        let pets_root = std::path::Path::new("/tmp/pets");
+        assert_eq!(pets_root.join(&raw.id), pets_root.join(slug));
+    }
 }

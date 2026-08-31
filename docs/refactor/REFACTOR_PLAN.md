@@ -362,7 +362,7 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
   - `RawPetJson` 增加 `frame: Option<RawFrame { width, height, cols }>`
   - `build_pet_def` 用 webp 实际尺寸 + 声明 frame 计算 `rows/cols`，返回 `PetDefJson.frame`
   - **验收**：192×208/8列 与 非标尺寸（如 256×256/6列）两类包均能正确切帧
-- [ ] **1.2** 🧪 **P0-2 修 `download_online_pet` 目录名与 id 不一致**
+- [x] **1.2** 🧪 **P0-2 修 `download_online_pet` 目录名与 id 不一致**
   - 强制 `raw.id = slug.clone()`（或目录名改从 `raw.id` 派生并走同一白名单校验）
   - **回归用例**：构造 `pet.json` 中 `id != slug` 的远端响应 → 下载 → 删除 → 断言目录确实被删除
 - [ ] **1.3** 🧪 **P0-3 通知服务安全加固**（详见 Phase 4.2，可提前）
@@ -373,7 +373,7 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 - [ ] **1.5** 🧪 **P0-5 macOS NSTimer tick 健壮性**
   - tick 整体包 `catch_unwind(AssertUnwindSafe(...))`
   - 所有 `Mutex::lock().unwrap()` → `if let Ok(g) = ... else { return; }`
-- [ ] **1.6** 🧪 **P1-1 `PetHost` 事件监听泄漏**
+- [x] **1.6** 🧪 **P1-1 `PetHost` 事件监听泄漏**
   - 抽出 `useTauriEvent(name, handler)` composable，内部 `onMounted` 注册、`onUnmounted` 取消
   - **回归用例**：mount → unmount → 断言所有监听被取消（mock `listen` 返回的 un 被调用 N 次）
 - [ ] **1.7** 🧪 **P1-2 `reqwest` 超时**
@@ -420,6 +420,25 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 >
 > **新增回归测试 10 条**（`SpritePet.spec.ts` 4 条 + `PetHost.spec.ts` 6 条），
 > 全量 `npm run verify` 通过：前端 17 passed / Rust 3 passed。
+
+> ### 追加完成：1.2 / 1.6
+>
+> **1.2 P0-2 目录名与 id 不一致**
+> 抽出纯函数 `normalize_pet_id_json(json_text, slug)`：把远程 pet.json 的 `id`
+> 改写为 slug 并返回规范化文本，**且落盘写回的是规范化后的文本**。
+> 修复前只改内存中的 `raw`、写盘的仍是原文，导致重启后 `list_imported_pets`
+> 读回远程 id，删除/编辑去拼一个不存在的目录——因 `if target.exists()` 保护而
+> **静默成功却什么都没做**。新增 8 条 Rust 单测，含一条显式断言
+> 「id == 本地目录名」契约的用例，防止将来被改回。
+>
+> **1.6 P1-1 事件监听泄漏**
+> 新增 `composables/useTauriEvent.ts`，把「注册 + 卸载自动取消 + 处理
+> `listen()` 异步竞态（组件先卸载、listen 后 resolve 时立即取消）」收敛到一处。
+> `PetHost` 的 9 个监听、`PetSettings` 的 2 个监听全部改用它，
+> 并顺手修掉两处 `document.addEventListener('contextmenu', ...)` 从未移除的泄漏。
+> 新增 4 条 composable 回归用例。
+>
+> **当前测试规模**：前端 21 passed（4 个 spec 文件）/ Rust 11 passed。
 
 **✅ Phase 1 验收**：功能基线 A/B/C/D/E 全量回归通过；P0 五项全部关闭；新增 ≥20 个回归测试。
 
