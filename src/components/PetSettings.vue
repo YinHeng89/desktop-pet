@@ -365,7 +365,7 @@ async function onFileChosen(e: Event): Promise<void> {
   try {
     const buf = await file.arrayBuffer()
     const base64 = arrayBufferToBase64(buf)
-    const pet = await importExternalPet(base64, file.name)
+    const pet = await importExternalPet(base64)
     setCurrentPet(pet.id)
     pushNotify(`宠物「${pet.displayName}」导入成功！`, 'wave')
   } catch (err) {
@@ -745,7 +745,8 @@ curl -X POST http://127.0.0.1:8756/notify \
               </button>
             </div>
             <div class="s-tips-note">
-              提示：宠物需处于「显示」状态才能看到气ß泡；双击气泡或 3 条后会自动消失。
+              提示：宠物需处于「显示」状态才能看到气泡；气泡默认 4
+              秒后自动消失，多条通知会依次排队播放。
             </div>
           </div>
         </div>

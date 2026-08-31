@@ -137,7 +137,7 @@ async function loadExternalPets(): Promise<void> {
   }
 }
 
-export async function importExternalPet(base64: string, fileName: string): Promise<PetDef> {
+export async function importExternalPet(base64: string): Promise<PetDef> {
   const core = await import('@tauri-apps/api/core')
   const ext = await core.invoke<{
     id: string
@@ -147,7 +147,7 @@ export async function importExternalPet(base64: string, fileName: string): Promi
     idle: FrameSeq
     talk: FrameSeq
     actions: Record<string, FrameSeq>
-  }>('import_pet', { base64, fileName })
+  }>('import_pet', { base64 })
   if (!ext) throw new Error('导入失败：Rust 返回空')
 
   const pet: PetDef = {
@@ -230,12 +230,9 @@ export async function updateExternalPet(
     if (patch.description !== undefined) pet.description = patch.description
     petStore.pets[idx] = { ...pet }
   }
-  // 跨窗口广播：main 窗口 / 托盘名同步（若编辑的是当前宠物，名字实时变）
-  try {
-    localStorage.setItem(STORAGE_KEY_ID, petStore.currentId)
-  } catch {
-    /* ignore */
-  }
+  // 注意：这里不写 localStorage、也不广播事件。
+  // 编辑只改 displayName/description，不影响 currentId，持久化已由 Rust 侧写回 pet.json；
+  // main 窗口的托盘名在下次重建托盘菜单（pet-pets-changed）时自然同步。
 }
 
 export function setCurrentPet(id: string): void {

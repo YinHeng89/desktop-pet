@@ -295,12 +295,7 @@ fn build_pet_def(raw: &RawPetJson, spritesheet_bytes: &[u8]) -> PetDefJson {
 
 /// 外部宠物导入命令：解压 zip 到 app_data_dir/pets/<id>/，返回宠物定义。
 #[tauri::command]
-pub async fn import_pet(
-    app: tauri::AppHandle,
-    base64: String,
-    file_name: String,
-) -> Result<PetDefJson, String> {
-    let _ = &file_name;
+pub async fn import_pet(app: tauri::AppHandle, base64: String) -> Result<PetDefJson, String> {
     let bytes = base64_decode(&base64).map_err(|e| format!("zip 内容解码失败: {e}"))?;
     let app_for_emit = app.clone();
 

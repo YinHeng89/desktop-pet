@@ -62,7 +62,8 @@ fn broadcast_event(app: tauri::AppHandle, event: String, payload: Option<serde_j
 
 /// 按宠物缩放比例重设 main 窗口尺寸。
 /// 缩放变化时调用：窗口跟随宠物一起缩放，保证气泡+宠物不被裁剪。
-/// scale 范围 0.8~1.3；宠物帧 192×208，窗口 = 气泡区 + 宠物区 + 留白。
+/// scale 范围 0.5~1.3（与 geometry::MIN_SCALE / MAX_SCALE 及前端一致）；
+/// 宠物帧 192×208，窗口 = 气泡区 + 宠物区 + 留白。
 ///
 /// 按 scale 计算 main 宠物窗口的逻辑尺寸（宽×高，含 24px 缓冲）。
 /// scale 范围与前端 MIN_SCALE(0.5)~MAX_SCALE(1.3) 对齐，避免 Rust 与前端口径分裂
