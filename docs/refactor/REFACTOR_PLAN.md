@@ -367,7 +367,7 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
   - **回归用例**：构造 `pet.json` 中 `id != slug` 的远端响应 → 下载 → 删除 → 断言目录确实被删除
 - [ ] **1.3** 🧪 **P0-3 通知服务安全加固**（详见 Phase 4.2，可提前）
   - 立即版：Host 头校验 + `Content-Length` 上限 8KB + 总超时 10s
-- [ ] **1.4** 🧪 **P0-4 `duration` 参数端到端生效**
+- [x] **1.4** 🧪 **P0-4 `duration` 参数端到端生效**
   - `NotifyItem` 增加 `duration?: number`；`showNotify` 用 `item.duration ?? DEFAULT_BUBBLE_MS`
   - **回归用例**：`{duration: 1000}` → 1s 后气泡消失（用 vi.useFakeTimers）
 - [ ] **1.5** 🧪 **P0-5 macOS NSTimer tick 健壮性**
@@ -379,21 +379,47 @@ features/A    → features/B/model             ⚠️ 仅允许 model 层，需�
 - [ ] **1.7** 🧪 **P1-2 `reqwest` 超时**
   - `Client::builder().timeout(Duration::from_secs(15)).connect_timeout(5s)`
   - 客户端提取为 `OnceLock<Client>` 复用连接池
-- [ ] **1.8** 🧪 **P1-3 缩放闪空白帧**：`displayScale` watch 改完 canvas 尺寸后立即 `drawFrame(seq.row, frameIdx)`
-- [ ] **1.9** 🧪 **P1-4 切宠物残影**：`loadImage()` 开头 `ctx.clearRect` + 置 `curSeqKey = ''`
+- [x] **1.8** 🧪 **P1-3 缩放闪空白帧**：`displayScale` watch 改完 canvas 尺寸后立即 `drawFrame(seq.row, frameIdx)`
+- [x] **1.9** 🧪 **P1-4 切宠物残影**：`loadImage()` 开头 `ctx.clearRect` + 置 `curSeqKey = ''`
 - [ ] **1.10** **P1-5 `pushNotify` 未处理的 Promise**
   - `PetSettings` 中 6 处调用统一改为 `void pushNotify(...).catch(e => showError(e))`
   - 加 ESLint 规则 `@typescript-eslint/no-floating-promises`
-- [ ] **1.11** **P1-6 文案乱码 + 文案纠错**
+- [x] **1.11** **P1-6 文案乱码 + 文案纠错**
   - `气ß泡` → `气泡`；同时把提示文案改为与实际一致（气泡 4s 自动消失）
   - 加 CI 检查：源码中出现 `ß` 等异常字符告警（可选）
-- [ ] **1.12** **死代码清理**
+- [x] **1.12** **死代码清理**
   - 删 `--pet-w` / `--tail-right` 及 `petWidth` / `petWidthCss` / `tailRightCss`
   - 删 `import_pet` 的 `file_name` 参数与 `let _ = &file_name;`
   - 删 `updateExternalPet` 中无意义的 localStorage 写入
-- [ ] **1.13** **注释/文档漂移修正**
+- [x] **1.13** **注释/文档漂移修正**
   - `main.rs:65` 注释 `0.8~1.3` → `0.5~1.3`
   - README：Windows 自启改为注册表 Run 键；NSTimer 50ms → 16ms；Info.plist 描述与 `tauri.conf.json` 对齐
+- [x] **1.14** 🧪 **【新增】`PetHost` 的 notify watcher 脱离组件作用域导致泄漏**
+  - 现象：写通知气泡测试时发现「第 1 个用例能收到通知、后续用例收不到」
+  - 根因：`watch(notifyStore.pending)` 注册在 **`async onMounted` 的 `await nextTick()` 之后**。
+    `await` 之后恢复执行时 Vue 的 `currentInstance` 已重置为 null，该 watcher 脱离组件的
+    effect scope，**组件 unmount 时不会被停止**，永久存活并持续抢消费 `notifyStore.pending`
+  - 修复：把该 watch 移到 `<script setup>` 顶层注册，由组件 scope 托管
+  - 回归用例：`PetHost.spec.ts › unmount 后不再消费通知`
+  - 影响面：生产环境 PetHost 只在 main 窗口挂载一次、生命周期等同 App，故未暴露；
+    但 HMR 与「窗口重建」场景下会累积多个消费者，属于真实缺陷
+
+> **Phase 1 已完成部分（1.4 / 1.8 / 1.9 / 1.11 / 1.12 / 1.13 / 1.14）**
+>
+> - **P0-4 `duration` 端到端生效**：`NotifyItem` 增加 `duration`，`showNotify` 用
+>   `normalizeDuration()` 取值。同时加了健壮性规则——非数字 / ≤0 / `NaN` 回退默认 4000ms，
+>   超过 60s 截断（HTTP 侧 duration 是任意 u64，不设上限会让气泡永久占用）。
+>   README 已补充取值规则表。
+> - **P1-3 缩放不闪空白帧**：`displayScale` watch 在改完 `canvas.width/height` 后立即重绘当前帧。
+> - **P1-4 切宠不残影**：`loadImage()` 开头调 `clearCanvas()`。
+> - **P1-6 文案乱码**：`气ß泡` → `气泡`；同时把「双击气泡或 3 条后会自动消失」这句
+>   **不实描述**改为「气泡默认 4 秒后自动消失，多条通知会依次排队播放」。
+> - **死代码清理**：`--pet-w` / `--tail-right` 及三个 computed；`import_pet` 的 `file_name`
+>   参数（含前端调用点同步改）；`updateExternalPet` 中无意义的 localStorage 写入。
+> - **注释/文档漂移**：见 1.13 三项。
+>
+> **新增回归测试 10 条**（`SpritePet.spec.ts` 4 条 + `PetHost.spec.ts` 6 条），
+> 全量 `npm run verify` 通过：前端 17 passed / Rust 3 passed。
 
 **✅ Phase 1 验收**：功能基线 A/B/C/D/E 全量回归通过；P0 五项全部关闭；新增 ≥20 个回归测试。
 
