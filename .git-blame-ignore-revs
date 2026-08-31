@@ -17,5 +17,9 @@
 #      无需额外配置；本地需执行第 3 步。
 #
 # ── 登记项 ──────────────────────────────────────────────────────
-# TODO: 追加「chore: 首次全量格式化（rustfmt + prettier）」提交的 hash。
-#       形如：3f9a1c2e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39
+# 首次全量格式化（prettier + cargo fmt）。
+# ⚠️ 注意：该提交除格式化外，还包含 11 处 clippy 机械修复
+#    （geometry.rs / pet_import.rs / main.rs / macos_pet.rs / notify_server.rs）。
+#    忽略它会让这 11 处在 blame 中指向格式化前的提交——因改动均为零行为变更
+#    且已在 commit message 中逐条列出，故判定为可接受。
+38a0e8184300f4b6a89b131ce002a3cb431044c8
