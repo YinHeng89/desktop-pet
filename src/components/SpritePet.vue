@@ -11,6 +11,7 @@
 // 共享同一张图导致 onload 回调互相覆盖、动画错乱（表现为「乱闪」）。
 import { onMounted, onBeforeUnmount, ref, watch, computed } from 'vue'
 import { petStore, currentPet } from '../store/pet'
+import { seqFor as frameSeqFor, frameBounds, isFrameInBounds } from '../features/pet/model/frame'
 
 const props = withDefaults(
   defineProps<{
@@ -38,14 +39,10 @@ const pet = computed(() => currentPet.value)
 const frame = computed(() => pet.value?.frame ?? petStore.frame)
 const displayScale = computed(() => props.scale || petStore.scale || 1)
 
-// 根据 state 取对应帧段：idle / talk / actions[state]
+// 根据 state 取对应帧段：idle / talk / actions[state]。
+// 纯逻辑（含 talk/idle 回退）已下沉到 features/pet/model/frame.ts，此处只做类型适配。
 function seqFor(state: string) {
-  const p = pet.value
-  if (!p) return null
-  if (state === 'talk') return p.talk
-  if (state === 'idle') return p.idle
-  const a = p.actions?.[state]
-  return a ?? p.idle
+  return frameSeqFor(state, pet.value)
 }
 
 function drawFrame(row: number, col: number): void {
@@ -56,18 +53,23 @@ function drawFrame(row: number, col: number): void {
   if (!ctx) return
   // 图片未就绪不绘制（避免反复 drawImage 报错 / 闪白）
   if (!imgLoaded || !img.naturalWidth) return
-  const fw = frame.value.width
-  const fh = frame.value.height
+
+  // ── NaN 守卫（必须放在所有越界判断之前）──
+  // seq.count 为 0 时 frameIdx = (frameIdx + 1) % 0 === NaN。而 NaN 的任何大小
+  // 比较都返回 false，会静默绕过下面的越界检查；一旦执行到 clearRect，随后的
+  // drawImage(..., NaN, ...) 抛错并被 catch 吞掉 → 画布空白、宠物消失。
+  if (!Number.isFinite(row) || !Number.isFinite(col)) return
 
   // ── 越界保护（关键）──
   // 外部宠物精灵图行数不统一（如 miku 只有 9 行，标准模板假设 11 行），
   // manifest 里的 row 可能越界。用运行时真实尺寸（naturalWidth/naturalHeight）
   // 计算实际行列数，越界时【不清空画布直接返回】，保持上一帧，避免 clearRect
   // 后 drawImage 失败导致的「宠物消失」。
-  const realCols = Math.floor(img.naturalWidth / fw)
-  const realRows = Math.floor(img.naturalHeight / fh)
-  if (realCols <= 0 || realRows <= 0) return
-  if (row >= realRows || col >= realCols) {
+  const fw = frame.value.width
+  const fh = frame.value.height
+  const bounds = frameBounds(img.naturalWidth, img.naturalHeight, { width: fw, height: fh })
+  if (bounds.rows <= 0 || bounds.cols <= 0) return
+  if (!isFrameInBounds(row, col, bounds)) {
     return // 越界帧：保持上一帧，不闪不消失
   }
 
@@ -154,11 +156,27 @@ function clearCanvas(): void {
   c.getContext('2d')?.clearRect(0, 0, c.width, c.height)
 }
 
-watch(displayScale, (s) => {
+/**
+ * 按「当前帧几何 × 缩放」同步 canvas 像素尺寸。
+ *
+ * 必须同时监听 frame 而不只是 displayScale：内置宠物是 192×208、外部宠物尺寸
+ * 各异（如 256×256），切换宠物时 frame.value 会变。若不同步 canvas 尺寸，
+ * drawFrame 会按新的 fw/fh 去精灵图上取源区域，却绘制到旧尺寸的画布上，
+ * 表现为宠物被非等比拉伸或裁切。
+ */
+function applyCanvasSize(): void {
   const c = canvas.value
   if (!c) return
-  c.width = Math.round(frame.value.width * s)
-  c.height = Math.round(frame.value.height * s)
+  const w = Math.round(frame.value.width * displayScale.value)
+  const h = Math.round(frame.value.height * displayScale.value)
+  // 幂等：给 width/height 赋值会清空画布，尺寸没变就别白清一次。
+  if (c.width === w && c.height === h) return
+  c.width = w
+  c.height = h
+}
+
+watch([frame, displayScale], () => {
+  applyCanvasSize()
   // 给 canvas.width / height 赋值会【清空画布】，必须立即重绘当前帧。
   // 否则要等到下一个动画间隔（最高 1 / fps 秒）才补上，表现为拖动缩放滑块时
   // 宠物周期性闪没。
@@ -186,11 +204,7 @@ function loadImage(): void {
 }
 
 onMounted(() => {
-  const c = canvas.value
-  if (c) {
-    c.width = Math.round(frame.value.width * displayScale.value)
-    c.height = Math.round(frame.value.height * displayScale.value)
-  }
+  applyCanvasSize()
   loadImage()
   rafId = requestAnimationFrame(tick)
 })

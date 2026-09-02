@@ -45,11 +45,16 @@ export const BUBBLE = {
   SETTLE_MS: 200,
 } as const
 
-/** 拖拽阈值（区分点击与拖拽）。 */
+/** 拖拽阈值与时序（区分点击与拖拽）。 */
 export const DRAG = {
+  /** 宠物窗口：位移超过该值才判定为拖拽（否则视为手抖/单击）。 */
   THRESHOLD_PX: 6,
+  /** 设置窗口标题栏拖动阈值（略小于宠物窗口，标题栏拖动要求更灵敏）。 */
   SETTINGS_THRESHOLD_PX: 5,
+  /** 窗口停止移动多久判定拖拽结束（Windows mouseup 常被 OS 吞掉，靠它兜底）。 */
   MOVED_DEBOUNCE_MS: 180,
+  /** 拖拽松手后忽略紧跟的 click 的时长，避免松手被误判成单击。 */
+  CLICK_GUARD_MS: 80,
 } as const
 
 /** 闲时动作与气泡停留时序。 */

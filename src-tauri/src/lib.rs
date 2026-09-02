@@ -35,29 +35,6 @@ fn open_external(url: String) {
 }
 
 /// 设置开机自启（true=开启，false=关闭）。
-#[tauri::command]
-fn set_autostart(enabled: bool) -> Result<String, String> {
-    if enabled {
-        autostart::enable()?;
-        Ok("enabled".into())
-    } else {
-        autostart::disable()?;
-        Ok("disabled".into())
-    }
-}
-
-/// 查询开机自启是否已开启。
-#[tauri::command]
-fn get_autostart() -> Result<bool, String> {
-    autostart::is_enabled()
-}
-
-/// 检测本次启动是否来自开机自启（注册表 Run 键写入时附加了 --autostart 参数）。
-#[tauri::command]
-fn was_auto_started() -> bool {
-    std::env::args().any(|a| a == "--autostart")
-}
-
 /// 返回当前平台标识（"macos" | "windows" | "linux"），供前端消灭 UA 嗅探（R5）。
 /// 编译期按 `#[cfg(target_os)]` 分派，零运行时开销。
 #[tauri::command]
@@ -443,16 +420,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             quit_app,
             open_external,
-            set_autostart,
-            get_autostart,
-            was_auto_started,
             get_platform,
             broadcast_event,
             resize_pet_window,
             open_settings_window,
             close_settings_window,
-            macos_pet::set_notify_interactive_rects,
-            windows_pet::set_pet_hit_rects,
             windows_pet::apply_pet_hit_rects,
             interactive::update_interactive_rects,
             windows_pet::hide_pet_window,

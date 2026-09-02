@@ -72,15 +72,6 @@ pub(crate) fn store_interactive_rects(rects: &[Rect]) {
     }
 }
 
-/// 前端调用：更新可交互区域列表。传空数组清空（整窗穿透）。
-/// 注意：空矩形说明前端尚未渲染出有效交互元素（如宠物尚未加载），
-/// 此时把 RECTS_INITIALIZED 置回 false，让 NSTimer 保持窗口可交互，
-/// 避免「已初始化但矩形为空」导致鼠标永久穿透。
-#[tauri::command]
-pub fn set_notify_interactive_rects(rects: Vec<Rect>) {
-    store_interactive_rects(&rects);
-}
-
 /// 是否已初始化（前端上报过矩形）。未初始化时保持可交互。
 #[allow(dead_code)]
 fn rects_initialized() -> bool {

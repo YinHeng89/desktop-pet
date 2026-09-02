@@ -106,32 +106,6 @@ export async function updateInteractiveRects(
   }
 }
 
-/** 上报可交互矩形（macOS 像素穿透用） */
-export async function setNotifyInteractiveRects(
-  rects: Array<[number, number, number, number]>,
-): Promise<void> {
-  if (!isTauri) return
-  try {
-    const invoke = await getInvoke()
-    await invoke('set_notify_interactive_rects', { rects })
-  } catch (e) {
-    console.error('[tauri] setNotifyInteractiveRects failed', e)
-  }
-}
-
-/** 上报可交互矩形（Windows 透明区域穿透用，SetWindowRgn 裁切） */
-export async function setPetHitRects(
-  rects: Array<[number, number, number, number]>,
-): Promise<void> {
-  if (!isTauri) return
-  try {
-    const invoke = await getInvoke()
-    await invoke('set_pet_hit_rects', { rects })
-  } catch (e) {
-    console.error('[tauri] setPetHitRects failed', e)
-  }
-}
-
 /** 触发 Windows 端把当前 hit rects 应用到窗口（SetWindowRgn 即时生效） */
 export async function applyPetHitRects(): Promise<void> {
   if (!isTauri) return
@@ -210,41 +184,6 @@ export async function closeSettingsWindow(): Promise<void> {
     await invoke('close_settings_window')
   } catch (e) {
     console.error('[tauri] closeSettingsWindow failed', e)
-  }
-}
-
-/** 设置开机自启 */
-export async function setAutoStart(enabled: boolean): Promise<void> {
-  if (!isTauri) return
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('set_autostart', { enabled })
-  } catch (e) {
-    console.error('[tauri] setAutoStart failed', e)
-  }
-}
-
-/** 查询开机自启状态 */
-export async function getAutoStart(): Promise<boolean> {
-  if (!isTauri) return false
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    return (await invoke<boolean>('get_autostart')) ?? false
-  } catch (e) {
-    console.error('[tauri] getAutoStart failed', e)
-    return false
-  }
-}
-
-/** 检测本次启动是否来自开机自启（Run 键注册时附加的 --autostart 参数） */
-export async function wasAutoStarted(): Promise<boolean> {
-  if (!isTauri) return false
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    return (await invoke<boolean>('was_auto_started')) ?? false
-  } catch (e) {
-    console.error('[tauri] wasAutoStarted failed', e)
-    return false
   }
 }
 

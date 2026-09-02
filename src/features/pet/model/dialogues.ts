@@ -46,11 +46,6 @@ export const EXTERNAL_DIALOGUES: DialogueMap = {
   look: ['嗯？', '怎么啦？', '有事吗'],
 }
 
-/** 通用兜底台词（动作名没有对应台词时用） */
-export const FALLBACK_DIALOGUES: DialogueMap = {
-  idle: ['……', '（发呆中）', '嗯……'],
-}
-
 /** 按宠物 id + 动作随机选一句台词；未知 id 回退外部通用台词，无对应台词返回空串。 */
 export function pickDialogue(
   petId: string,

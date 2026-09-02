@@ -65,6 +65,56 @@ pub fn is_allowed_host(host: Option<&str>) -> bool {
     )
 }
 
+/// 校验 `Origin` 头，阻断浏览器跨站请求。
+///
+/// `Host` 白名单（[`is_allowed_host`]）只能防 DNS-rebinding（恶意域名解析到
+/// 127.0.0.1、浏览器仍带 `Host: evil.com`），**挡不住**「恶意网页直接 fetch 本机
+/// 端口」——此时浏览器带的是 `Host: 127.0.0.1` 与 `Origin: https://evil.com`，
+/// 前者恰好通过白名单，于是宠物被远程网页随意操纵。
+///
+/// 规则：
+///   - 无 `Origin` ⟹ 非浏览器上下文（curl / Python / 服务端程序），放行；
+///   - `Origin: null` 或空 ⟹ 沙箱 iframe、`data:` URI、CSP 受限源，拒绝；
+///   - 其余必须是 `http(s)://` 的回环源（`127.0.0.1` / `localhost` / `::1`）。
+///
+/// 这样本地开发服（`http://localhost:5173`）仍可调通知接口，而 `https://evil.com`
+/// 被拒。注意：任何能在本机监听端口的进程本就等效于「本地程序」，故允许回环源是预期行为。
+pub fn is_allowed_origin(origin: Option<&str>) -> bool {
+    let Some(origin) = origin else {
+        return true; // 无 Origin = 非浏览器（curl / Python / 服务端），放行
+    };
+    let origin = origin.trim();
+    if origin.is_empty() || origin.eq_ignore_ascii_case("null") {
+        return false; // 沙箱 / data: / CSP 产生的 null 源，拒绝
+    }
+    // 仅允许 http(s) 回环源
+    let rest = match origin.strip_prefix("http://") {
+        Some(r) => r,
+        None => match origin.strip_prefix("https://") {
+            Some(r) => r,
+            None => return false,
+        },
+    };
+    // 去掉路径部分，只取 host[:port]
+    let host = rest.split('/').next().unwrap_or(rest);
+    // 提取「地址」部分用于比较（去掉端口）：
+    //   - IPv6 字面量 `[::1]:port`：先按 `]` 拆，地址在方括号内（不可按 `:` 拆，
+    //     否则 `::1` 里的冒号会误拆成空串）；
+    //   - 其余（IPv4 / 域名）：按第一个 `:` 拆，端口在其后。
+    let addr = if let Some(inner) = host.strip_prefix('[') {
+        match inner.split_once(']') {
+            Some((a, _port_part)) => a,
+            None => host,
+        }
+    } else {
+        host.split_once(':').map(|(h, _port)| h).unwrap_or(host)
+    };
+    matches!(
+        addr.to_ascii_lowercase().as_str(),
+        "127.0.0.1" | "localhost" | "::1"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +214,37 @@ mod tests {
     #[test]
     fn rejects_malformed_ipv6_literal() {
         assert!(!is_allowed_host(Some("[::1")));
+    }
+
+    #[test]
+    fn origin_allows_non_browser_clients() {
+        // 无 Origin（curl / Python / 服务端程序）放行
+        assert!(is_allowed_origin(None));
+    }
+
+    #[test]
+    fn origin_allows_loopback_browser_pages() {
+        for o in [
+            "http://127.0.0.1:8756",
+            "http://localhost",
+            "https://localhost:5173",
+            "http://[::1]:5173",
+        ] {
+            assert!(is_allowed_origin(Some(o)), "应允许: {o}");
+        }
+    }
+
+    #[test]
+    fn origin_rejects_remote_and_null() {
+        for o in [
+            "https://evil.com",
+            "http://192.168.1.5",
+            "null",
+            "",
+            "file:///tmp/x",
+            "ftp://127.0.0.1",
+        ] {
+            assert!(!is_allowed_origin(Some(o)), "应拒绝: {o}");
+        }
     }
 }

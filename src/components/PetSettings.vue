@@ -22,6 +22,7 @@ import { pushNotify } from '../store/notify'
 import {
   closeSettingsWindow,
   startDragging,
+  onWindowMoved,
   browseOnlinePets,
   downloadOnlinePet,
   openExternal,
@@ -29,6 +30,9 @@ import {
   type OnlinePetMeta,
 } from '../tauri'
 import { useTauriEvent } from '../composables/useTauriEvent'
+import { DRAG } from '../shared/config/constants'
+import { arrayBufferToBase64 } from '../shared/utils/base64'
+import { filterOnlinePets } from '../features/gallery/model/filter'
 import SpritePet from './SpritePet.vue'
 
 /**
@@ -75,7 +79,7 @@ useTauriEvent('pet-switch', (payload) => {
 // 此处兜底：挂载时若尚未加载则主动加载，保证列表与预览始终有数据。
 // 当前选中的宠物由共享 localStorage（loadId 在 store 初始化时读取）决定，
 // currentPet 已改为「未匹配时返回 null」而非回退第一个，故不会首屏闪现第一个宠物。
-onMounted(() => {
+onMounted(async () => {
   // settings 是独立 webview 窗口，必须在此预加载 windowApi，
   // 否则 startDragging 因 windowApi 为 null 而直接 return，窗口无法拖动。
   void preloadTauri()
@@ -84,6 +88,10 @@ onMounted(() => {
   }
   // 禁用右键菜单（避免无边框窗口里弹出 webview 默认菜单）
   document.addEventListener('contextmenu', onContextMenu)
+
+  // 注册 onWindowMoved 兜底：必须在所有 await 之前注册，快速拖拽时监听未就绪会失效。
+  // 仅 Tauri 环境有效；非 Tauri（浏览器预览）返回空函数。
+  unlistenWindowMoved = await onWindowMoved(onRootDragMovedFallback)
 
   // 左侧底部版本号：读取 Tauri 打包时嵌入的版本（来自 tauri.conf.json）
   getVersion()
@@ -94,8 +102,17 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  // Tauri 事件监听由 useTauriEvent 自动取消，这里只清理 document 级监听
+  // Tauri 事件监听由 useTauriEvent 自动取消，这里清理 document 级与 window 级监听
   document.removeEventListener('contextmenu', onContextMenu)
+  // 拖拽中卸载会导致全局 mousemove/mouseup 残留，必须显式移除
+  window.removeEventListener('mousemove', onRootDragMove)
+  window.removeEventListener('mouseup', onRootMouseUp)
+  // 清理所有计时器（避免卸载后回调访问已销毁的响应式对象）
+  if (pendingDeleteTimer) clearTimeout(pendingDeleteTimer)
+  if (cooldownTimer) clearInterval(cooldownTimer)
+  if (curlCopiedTimer) clearTimeout(curlCopiedTimer)
+  if (sDragMovedTimer) clearTimeout(sDragMovedTimer)
+  if (unlistenWindowMoved) unlistenWindowMoved()
 })
 
 // 设置界面左下角显示的版本号（来自 tauri.conf.json）
@@ -298,16 +315,9 @@ const galleryKeyword = ref('')
 // 正在下载的 slug 集合（用于按钮 loading 态）
 const downloading = ref<Record<string, boolean>>({})
 
-const filteredOnlinePets = computed<OnlinePetMeta[]>(() => {
-  const kw = galleryKeyword.value.trim().toLowerCase()
-  if (!kw) return onlinePets.value
-  return onlinePets.value.filter(
-    (p) =>
-      p.name.toLowerCase().includes(kw) ||
-      p.author.toLowerCase().includes(kw) ||
-      p.category.toLowerCase().includes(kw),
-  )
-})
+const filteredOnlinePets = computed<OnlinePetMeta[]>(() =>
+  filterOnlinePets(onlinePets.value, galleryKeyword.value),
+)
 
 // 已下载到本地的 slug 集合（避免重复下载）
 const installedSlugs = computed<Set<string>>(() => new Set(petStore.pets.map((p) => p.id)))
@@ -357,15 +367,6 @@ async function downloadPet(p: OnlinePetMeta): Promise<void> {
     downloading.value = { ...downloading.value, [p.slug]: false }
   }
 }
-function arrayBufferToBase64(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf)
-  let binary = ''
-  const chunkSize = 0x8000
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
-  }
-  return btoa(binary)
-}
 async function onFileChosen(e: Event): Promise<void> {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
@@ -399,11 +400,16 @@ function onClose(): void {
 // 关键：不在 mousedown 内同步 startDragging（Windows 上会吞掉 click，导致列表项/开关点不动），
 // 而是「鼠标移动超过阈值才真正拖拽」——与 PetHost 的阈值机制一致。
 // 命中交互元素（按钮/输入框/滑块/卡片等）不启动拖拽，保证点击/滑动不被吞。
-const DRAG_THRESHOLD_PX = 5
+const DRAG_THRESHOLD_PX = DRAG.SETTINGS_THRESHOLD_PX
 let sDragStartX = 0
 let sDragStartY = 0
 let sDragMoved = false
 let sDragging = false
+// 系统级拖拽（startDragging 后 OS 接管移动）兜底：Windows 上 mouseup 常被 OS 吞掉，
+// 导致 onRootMouseUp 收不到、sDragging 卡 true、全局 mousemove 残留 →
+// 下一次单击被误判成拖拽、整窗点不动。靠 onWindowMoved 的高频回调 debounce 兜底复位。
+let sDragMovedTimer: ReturnType<typeof setTimeout> | null = null
+let unlistenWindowMoved: (() => void) | null = null
 
 function onRootMouseDown(e: MouseEvent): void {
   if (e.button !== 0) return
@@ -439,8 +445,19 @@ function onRootDragMove(e: MouseEvent): void {
 
 function onRootMouseUp(): void {
   sDragging = false
+  sDragMoved = false
   window.removeEventListener('mousemove', onRootDragMove)
   window.removeEventListener('mouseup', onRootMouseUp)
+}
+
+/** onWindowMoved 兜底：窗口停止移动即判定拖拽结束（容 mouseup 被吞）。 */
+function onRootDragMovedFallback(): void {
+  if (!sDragging) return
+  if (sDragMovedTimer) clearTimeout(sDragMovedTimer)
+  sDragMovedTimer = setTimeout(() => {
+    sDragMovedTimer = null
+    if (sDragging) onRootMouseUp()
+  }, DRAG.MOVED_DEBOUNCE_MS)
 }
 </script>
 

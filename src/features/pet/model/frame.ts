@@ -3,7 +3,7 @@
 // 抽纯动机：外部宠物精灵图行/列数不统一（如 miku 9 行、标准模板 11 行），
 // 切帧越界会「宠物闪没」。越界保护逻辑必须可单测，避免改尺寸算法时回归。
 
-import type { FrameSeq, PetFrame, PetFrameSource } from './types'
+import type { FrameSeq, PetFrameSource } from './types'
 
 /** 按动作状态取对应帧段：talk/idle/actions[state]，未知动作回退 idle。 */
 export function seqFor(state: string, pet: PetFrameSource | null | undefined): FrameSeq | null {
@@ -14,11 +14,15 @@ export function seqFor(state: string, pet: PetFrameSource | null | undefined): F
   return a ?? pet.idle ?? null
 }
 
-/** 用运行时真实图尺寸算实际行列数（外部包尺寸各异）。 */
+/**
+ * 用运行时真实图尺寸算实际行列数（外部包尺寸各异）。
+ * 只依赖 width/height，故参数不用完整 PetFrame —— 内置宠物的全局 frame
+ * 只有 {width,height,cols}，没有 rows。
+ */
 export function frameBounds(
   imgW: number,
   imgH: number,
-  frame: PetFrame,
+  frame: { width: number; height: number },
 ): { rows: number; cols: number } {
   const cols = Math.floor(imgW / frame.width)
   const rows = Math.floor(imgH / frame.height)

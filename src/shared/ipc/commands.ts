@@ -9,10 +9,6 @@ export const COMMANDS = {
   openExternal: 'open_external',
   getPlatform: 'get_platform',
   broadcastEvent: 'broadcast_event',
-  // 自启
-  setAutostart: 'set_autostart',
-  getAutostart: 'get_autostart',
-  wasAutoStarted: 'was_auto_started',
   // 窗口
   resizePetWindow: 'resize_pet_window',
   openSettingsWindow: 'open_settings_window',
@@ -21,8 +17,6 @@ export const COMMANDS = {
   showPetWindow: 'show_pet_window',
   // 穿透
   updateInteractiveRects: 'update_interactive_rects',
-  setNotifyInteractiveRects: 'set_notify_interactive_rects',
-  setPetHitRects: 'set_pet_hit_rects',
   applyPetHitRects: 'apply_pet_hit_rects',
   // 宠物导入/管理
   importPet: 'import_pet',

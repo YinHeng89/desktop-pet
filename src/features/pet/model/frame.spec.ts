@@ -25,13 +25,13 @@ describe('seqFor', () => {
 
 describe('frameBounds', () => {
   it('标准模板 192x208×8列11行', () => {
-    expect(frameBounds(192 * 8, 208 * 11, { width: 192, height: 208, cols: 8, rows: 11 })).toEqual({
+    expect(frameBounds(192 * 8, 208 * 11, { width: 192, height: 208 })).toEqual({
       cols: 8,
       rows: 11,
     })
   })
   it('非标高清包按真实图尺寸算列/行', () => {
-    expect(frameBounds(256 * 6, 256 * 6, { width: 256, height: 256, cols: 8, rows: 11 })).toEqual({
+    expect(frameBounds(256 * 6, 256 * 6, { width: 256, height: 256 })).toEqual({
       cols: 6,
       rows: 6,
     })

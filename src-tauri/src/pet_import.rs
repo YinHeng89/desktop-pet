@@ -15,7 +15,7 @@
 //
 // spritesheet 以 base64 data URL 返回（避免引入 asset 协议配置），前端直接可用。
 
-use std::io::Read;
+use std::io::{self, Read};
 use tauri::{Emitter, Manager};
 
 use crate::domain::gallery::index::{
@@ -25,6 +25,41 @@ use crate::domain::pet::codec::base64_decode;
 use crate::domain::pet::model::{build_pet_def, PetDefJson, RawPetJson};
 use crate::domain::pet::validator::safe_join;
 use crate::infra::http_client::http_client;
+
+/// 单条解压条目（未压缩）的硬上限：50 MB。
+///
+/// 防「解压炸弹」：zip 头里的 `entry.size()` 是攻击者可控的声明值，
+/// 不可直接 `Vec::with_capacity(entry.size())`（会瞬间预约数 GB 内存），
+/// 更不能 `read_to_end`（声明 4GB 的条目会把内存撑爆）。
+/// 这里改为分块读取并强制总量上限，超限即报错。
+/// 正常宠物精灵图仅数百 KB～数 MB，50 MB 是宽松上限。
+const MAX_PET_FILE_BYTES: usize = 50 * 1024 * 1024;
+
+/// 同上，但针对文本类（pet.json），限制更紧（1 MB）。
+const MAX_PET_JSON_BYTES: usize = 1024 * 1024;
+
+/// 分块读取 `Read`，总量不超过 `max` 字节（防 zip 炸弹）。
+///
+/// 不信任 `entry.size()`，只按实际读到的字节累加判断；超出上限立即返回错误，
+/// 避免内存被恶意声明撑爆。返回读到的全部字节。
+fn read_entry_bounded<R: Read>(mut reader: R, max: usize) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(max.min(64 * 1024));
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        if buf.len() + n > max {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("解压条目超出大小上限（{max} 字节）"),
+            ));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    Ok(buf)
+}
 
 /// 外部宠物导入命令：解压 zip 到 app_data_dir/pets/<id>/，返回宠物定义。
 #[tauri::command]
@@ -51,11 +86,13 @@ pub async fn import_pet(app: tauri::AppHandle, base64: String) -> Result<PetDefJ
                 entry.name().ends_with("pet.json")
             };
             if is_pet_json {
-                let mut content = String::new();
-                zip.by_index(i)
-                    .map_err(|e| format!("zip 读取失败: {e}"))?
-                    .read_to_string(&mut content)
-                    .map_err(|e| format!("pet.json 读取失败: {e}"))?;
+                let bytes = read_entry_bounded(
+                    zip.by_index(i).map_err(|e| format!("zip 读取失败: {e}"))?,
+                    MAX_PET_JSON_BYTES,
+                )
+                .map_err(|e| format!("pet.json 读取失败: {e}"))?;
+                let content =
+                    String::from_utf8(bytes).map_err(|e| format!("pet.json 编码非 UTF-8: {e}"))?;
                 raw_json = Some(
                     serde_json::from_str(&content)
                         .map_err(|e| format!("pet.json 解析失败: {e}"))?,
@@ -71,11 +108,14 @@ pub async fn import_pet(app: tauri::AppHandle, base64: String) -> Result<PetDefJ
         // id 校验（防目录穿越）→ 拼出宠物目录
         let target_dir = safe_join(&root, &id).map_err(|e| e.message)?;
 
-        // 解压全部条目，记录 webp 字节
-        if target_dir.exists() {
-            std::fs::remove_dir_all(&target_dir).map_err(|e| format!("清理旧宠物目录失败: {e}"))?;
+        // 先解压到临时目录，成功后再原子改名覆盖旧目录：
+        // 这样中途失败（解压炸弹 / 缺文件 / IO 错误）不会留下「半个损坏宠物」，
+        // 已存在的旧宠物目录保持完整。
+        let tmp_dir = root.join(format!(".import-tmp-{id}"));
+        if tmp_dir.exists() {
+            std::fs::remove_dir_all(&tmp_dir).map_err(|e| format!("清理临时目录失败: {e}"))?;
         }
-        std::fs::create_dir_all(&target_dir).map_err(|e| format!("创建宠物目录失败: {e}"))?;
+        std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建宠物目录失败: {e}"))?;
 
         let mut webp_bytes: Option<Vec<u8>> = None;
         for i in 0..zip.len() {
@@ -84,25 +124,43 @@ pub async fn import_pet(app: tauri::AppHandle, base64: String) -> Result<PetDefJ
                 continue;
             };
             let lower = rel.to_string_lossy().to_lowercase();
-            let out = target_dir.join(&rel);
+            let out = tmp_dir.join(&rel);
             if entry.is_dir() {
                 std::fs::create_dir_all(&out).map_err(|e| format!("解压建目录失败: {e}"))?;
             } else {
                 if let Some(parent) = out.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| format!("解压建目录失败: {e}"))?;
                 }
-                let mut buf = Vec::with_capacity(entry.size() as usize);
-                entry
-                    .read_to_end(&mut buf)
+                // 分块读取并强制大小上限：不信任 entry.size()，防解压炸弹。
+                let buf = read_entry_bounded(&mut entry, MAX_PET_FILE_BYTES)
                     .map_err(|e| format!("解压读取失败: {e}"))?;
                 std::fs::write(&out, &buf).map_err(|e| format!("解压写文件失败: {e}"))?;
-                if lower.ends_with(".webp") {
+                // 精灵图选取：优先精确名 spritesheet.webp（覆盖已有）；
+                // 否则兜底取第一个 .webp（避免「取 zip 里最后一个 .webp」的随机性）。
+                let name_lower = entry.name().to_string().to_lowercase();
+                if lower.ends_with(".webp")
+                    && (name_lower.ends_with("spritesheet.webp") || webp_bytes.is_none())
+                {
                     webp_bytes = Some(buf);
                 }
             }
         }
 
-        let webp_bytes = webp_bytes.ok_or("压缩包内未找到 spritesheet.webp")?;
+        let webp_bytes = match webp_bytes {
+            Some(b) => b,
+            None => {
+                // 缺精灵图：清理临时目录，避免残留空目录；旧宠物目录保持不变。
+                let _ = std::fs::remove_dir_all(&tmp_dir);
+                return Err("压缩包内未找到 spritesheet.webp".into());
+            }
+        };
+
+        // 全部就绪：原子替换旧目录（先删旧、再改名；同父目录下 rename 为 O(1)）。
+        if target_dir.exists() {
+            std::fs::remove_dir_all(&target_dir).map_err(|e| format!("清理旧宠物目录失败: {e}"))?;
+        }
+        std::fs::rename(&tmp_dir, &target_dir).map_err(|e| format!("写入宠物目录失败: {e}"))?;
+
         Ok(build_pet_def(&raw, &webp_bytes))
     })
     .await
@@ -497,5 +555,32 @@ mod tests {
         let raw: RawPetJson = serde_json::from_str(&out).unwrap();
         let pets_root = std::path::Path::new("/tmp/pets");
         assert_eq!(pets_root.join(&raw.id), pets_root.join(slug));
+    }
+
+    // ── read_entry_bounded（解压炸弹防护）──
+    // 回归 P0 的 `Vec::with_capacity(entry.size())` 信任攻击者声明大小，
+    // 以及 read_to_end 实际撑爆内存的漏洞。
+
+    #[test]
+    fn read_entry_bounded_accepts_small_payload() {
+        let data = vec![1u8, 2, 3, 4];
+        let out = read_entry_bounded(&data[..], 1024).unwrap();
+        assert_eq!(out, data);
+    }
+
+    #[test]
+    fn read_entry_bounded_rejects_oversized_stream() {
+        // 模拟一个持续吐数据、实际远超上限的流：必须报错而非分配数 GB。
+        let big = std::io::repeat(0u8).take((MAX_PET_FILE_BYTES as u64) + 1);
+        let err = read_entry_bounded(big, MAX_PET_FILE_BYTES).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_entry_bounded_exact_limit_is_ok() {
+        // 恰好等于上限的流应成功（边界值不被误拒）。
+        let data = std::io::repeat(7u8).take(MAX_PET_FILE_BYTES as u64);
+        let out = read_entry_bounded(data, MAX_PET_FILE_BYTES).unwrap();
+        assert_eq!(out.len(), MAX_PET_FILE_BYTES);
     }
 }

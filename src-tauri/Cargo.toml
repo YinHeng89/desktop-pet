@@ -46,7 +46,11 @@ objc2-service-management = { version = "0.3", features = ["SMAppService"] }
 winreg = "0.52"
 
 [profile.release]
-panic = "abort"
+# 必须用 unwind 而不是 abort：macos_pet.rs 在 NSTimer tick 的 FFI 边界用
+# catch_unwind 兜住 panic，若设为 abort，一次 tick 内的 panic 会直接 abort
+# 整个进程（历史 bug：「NSTimer tick 跨 FFI 边界 panic → 程序崩溃」）。
+# 保持 unwind 才能让 catch_unwind 真正生效，把崩溃限制在单个 tick 内。
+panic = "unwind"
 codegen-units = 4
 lto = "thin"
 opt-level = 3

@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 use crate::domain::notify::http_request::{
-    content_length, find_subslice, header_value, is_allowed_host,
+    content_length, find_subslice, header_value, is_allowed_host, is_allowed_origin,
 };
 
 const PORT: u16 = 8756;
@@ -119,39 +119,58 @@ fn write_json(stream: &mut std::net::TcpStream, status: &str, body: &str) -> io:
 
 /// 启动本地通知服务（阻塞，需在独立线程调用）。
 pub fn start(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
-        let listener = match TcpListener::bind(("127.0.0.1", PORT)) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("[notify-server] 绑定端口 {PORT} 失败: {e}");
-                // 上报前端：端口被占用时用户此前完全无感知，
-                // 只会表现为「通知发不出去」却不知道原因。
-                let _ = app.emit(
-                    "notify-server-error",
-                    serde_json::json!({ "port": PORT, "error": e.to_string() }),
-                );
-                return;
+    // 用 Builder::spawn 而非 thread::spawn：后者在线程创建失败时会 panic，
+    // 在 release + panic=abort 下会直接干掉整个进程 → 通知功能永久失效。
+    // 这里失败只是「通知服务没起来」，应用其余部分必须继续运行。
+    // 外层错误上报需要 app 的克隆；闭包内委托用原 app（move 进去）。
+    let app_for_error = app.clone();
+    if let Err(e) = std::thread::Builder::new()
+        .name("notify-server".to_string())
+        .spawn(move || {
+            let listener = match TcpListener::bind(("127.0.0.1", PORT)) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("[notify-server] 绑定端口 {PORT} 失败: {e}");
+                    // 上报前端：端口被占用时用户此前完全无感知，
+                    // 只会表现为「通知发不出去」却不知道原因。
+                    let _ = app.emit(
+                        "notify-server-error",
+                        serde_json::json!({ "port": PORT, "error": e.to_string() }),
+                    );
+                    return;
+                }
+            };
+            println!("[notify-server] 已监听 http://127.0.0.1:{PORT}/notify");
+
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+
+                // 并发上限：超出直接关闭新连接。
+                // fetch_add 返回的是自增前的值，故用 >= 判断。
+                if ACTIVE_CONNECTIONS.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+                    ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
+                    continue;
+                }
+
+                let app = app.clone();
+                // 同样用 Builder：线程创建失败时必须手动回退计数，
+                // 否则 ACTIVE_CONNECTIONS 泄漏 → 后续所有连接被拒。
+                if let Err(_) = std::thread::Builder::new().spawn(move || {
+                    let _guard = ConnectionGuard;
+                    let _ = handle(&mut stream, &app);
+                }) {
+                    eprintln!("[notify-server] 创建工作线程失败，回退连接计数");
+                    ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
+                }
             }
-        };
-        println!("[notify-server] 已监听 http://127.0.0.1:{PORT}/notify");
-
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { continue };
-
-            // 并发上限：超出直接关闭新连接。
-            // fetch_add 返回的是自增前的值，故用 >= 判断。
-            if ACTIVE_CONNECTIONS.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
-                ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
-                continue;
-            }
-
-            let app = app.clone();
-            std::thread::spawn(move || {
-                let _guard = ConnectionGuard;
-                let _ = handle(&mut stream, &app);
-            });
-        }
-    });
+        })
+    {
+        eprintln!("[notify-server] 启动监听线程失败: {e}");
+        let _ = app_for_error.emit(
+            "notify-server-error",
+            serde_json::json!({ "port": PORT, "error": format!("启动监听线程失败: {e}") }),
+        );
+    }
 }
 
 /// 处理单个连接。
@@ -200,8 +219,15 @@ fn handle(stream: &mut std::net::TcpStream, app: &tauri::AppHandle) -> io::Resul
 
     let header_text = String::from_utf8_lossy(&data[..header_end]).to_string();
 
-    // ── 2) 安全校验：Host（防 DNS-rebinding / 浏览器跨站）──
+    // ── 2) 安全校验：Host（防 DNS-rebinding）──
     if !is_allowed_host(header_value(&header_text, "host")) {
+        return write_status(stream, "403 Forbidden");
+    }
+
+    // ── 2.5) 安全校验：Origin（防浏览器跨站 fetch）──
+    // 恶意网页直接对 127.0.0.1:8756 发 POST 时，浏览器带 Host:127.0.0.1（恰好过白名单）
+    // 但 Origin 是远程站点；无 Origin（curl/Python）= 非浏览器，放行。
+    if !is_allowed_origin(header_value(&header_text, "origin")) {
         return write_status(stream, "403 Forbidden");
     }
 

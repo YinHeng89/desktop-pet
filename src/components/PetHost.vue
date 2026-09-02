@@ -22,41 +22,43 @@ import {
   MAX_SCALE,
 } from '../store/pet'
 import { notifyStore, consumeNotify } from '../store/notify'
-import { BUILTIN_DIALOGUES, EXTERNAL_DIALOGUES } from '../features/pet/model/dialogues'
 import SpritePet from './SpritePet.vue'
+// ── 已抽纯的领域逻辑（★ 零 Vue 依赖，见各自文件的 spec）──
+// 迁移前这些规则以字面量形式散落在本组件的定时器回调里，与 model 层形成两份
+// 平行实现：spec 全绿但生产根本不走，任何一方改动都会静默分叉。此处统一接线。
+import {
+  normalizeDuration,
+  NotifyQueue,
+  shouldPlayActionFirst,
+  type NotifyItem,
+} from '../features/notify/model/notifyQueue'
+import {
+  RANDOM_POOL,
+  actionDurationMs,
+  pickRandomAction,
+  nextRandomDelayMs,
+} from '../features/pet/model/actionScheduler'
+import { computeHitRects, type MeasuredRect } from '../features/pet/model/geometry'
+import { pickDialogue } from '../features/pet/model/dialogues'
+import { TIMING, DRAG, BUBBLE } from '../shared/config/constants'
+import { isMacOS } from '../shared/platform'
 
 // macOS 判断：macOS 由原生层（macos_pet.rs 的 NSTimer）驱动 hover/drag，
 // 因为 WebView 在 App 非激活时 mouseenter/mousedown 不可靠；点击/双击仍走 DOM @click/@dblclick。
-const isMac =
-  typeof navigator !== 'undefined' &&
-  (/Mac|iPhone|iPad|iPod/i.test(navigator.platform) || /Macintosh/i.test(navigator.userAgent))
+// 平台探测统一走 shared/platform（优先 Rust 结果，UA 仅作首帧降级），不在组件里嗅探 navigator。
+//
+// ⚠️ 必须用 computed 而非模块级常量：`get_platform` 是异步 invoke，由 App.vue 在
+// onMounted 里填充缓存，而【子组件 onMounted 先于父组件执行】。若在这里一次性求值，
+// 首帧必然拿到降级结果，macOS 上会错误地走 DOM 拖拽/悬停方案。
+const isMac = computed(() => isMacOS())
 
 // ── 通知气泡（接收外部通知）──
 //
-// 时长常量。TODO(phase5)：迁入 shared/config/constants.ts 作为全局唯一真源
-//（届时由 Rust domain 生成，并用契约测试保证两端一致）。
-const DEFAULT_NOTIFY_MS = 4000
-// 上限保护：HTTP 接口的 duration 是任意 u64，若不设上限，外部脚本传一个极大的值
-// 会让宠物永久停在 talk 状态、气泡不再消失。
-const MAX_NOTIFY_MS = 60_000
-
-/** 归一化气泡时长：非法值（非数字 / ≤0）回退默认，超出上限截断。 */
-function normalizeDuration(d: unknown): number {
-  const n = Number(d)
-  if (!Number.isFinite(n) || n <= 0) return DEFAULT_NOTIFY_MS
-  return Math.min(n, MAX_NOTIFY_MS)
-}
-
-interface NotifyItem {
-  id: number
-  text: string
-  action?: string
-  /** 气泡显示时长(ms)。未指定时用 DEFAULT_NOTIFY_MS。 */
-  duration?: number
-}
+// 时长规则（归一化 / 上限截断）已下沉到 features/notify/model/notifyQueue.ts，
+// 此处只保留渲染状态与定时器，不再维护第二份常量。
 const currentNotify = ref<NotifyItem | null>(null)
-const notifyQueue: Array<NotifyItem> = []
-let notifySeq = 0
+// 纯 FIFO 队列（入队/出队规则可单测，与 Vue 状态解耦）。
+const notifyQueue = new NotifyQueue()
 let notifyTimer: ReturnType<typeof setTimeout> | null = null
 
 // ── 单击搭话气泡（独立于通知，3 秒消失）──
@@ -80,7 +82,7 @@ function playAction(name: string, durationMs?: number, onDone?: () => void): voi
     return
   }
   petState.value = name
-  const dur = durationMs ?? (seq.count / (seq.fps || 8)) * 1000
+  const dur = durationMs ?? actionDurationMs(seq)
   if (actionTimer) clearTimeout(actionTimer)
   actionTimer = setTimeout(() => {
     petState.value = 'idle'
@@ -88,37 +90,31 @@ function playAction(name: string, durationMs?: number, onDone?: () => void): voi
   }, dur)
 }
 
-// 随机闲时动作白名单（排除方向性动作）
-const RANDOM_POOL = ['wave', 'jump', 'failed', 'waiting', 'working', 'look']
-
 function playRandomAction(): string | null {
   const actions = currentPet.value?.actions ?? {}
-  const names = RANDOM_POOL.filter((n) => actions[n])
-  if (names.length === 0 || petState.value === 'talk') {
+  const name = pickRandomAction(RANDOM_POOL, actions, petState.value)
+  if (!name) {
     scheduleRandomAction()
     return null
   }
-  const name = names[Math.floor(Math.random() * names.length)]
   playAction(name, undefined, () => scheduleRandomAction())
   return name
 }
 
 function showChat(action: string): void {
   const petId = currentPet.value?.id ?? ''
-  const map = BUILTIN_DIALOGUES[petId] ?? EXTERNAL_DIALOGUES
-  const lines = map[action]
-  chatText.value = lines && lines.length > 0 ? lines[Math.floor(Math.random() * lines.length)] : ''
+  chatText.value = pickDialogue(petId, action)
   if (chatTimer) clearTimeout(chatTimer)
   if (chatText.value) {
     chatTimer = setTimeout(() => {
       chatText.value = ''
-    }, 3000)
+    }, TIMING.CHAT_MS)
   }
 }
 
 function scheduleRandomAction(): void {
   if (randomTimer) clearTimeout(randomTimer)
-  const delay = 6000 + Math.random() * 9000
+  const delay = nextRandomDelayMs()
   randomTimer = setTimeout(() => {
     if (petState.value === 'idle') playRandomAction()
     else scheduleRandomAction()
@@ -138,29 +134,23 @@ function showNotify(item: NotifyItem): void {
 }
 
 function showNextNotify(): void {
-  if (notifyQueue.length === 0) {
+  const item = notifyQueue.dequeue()
+  if (!item) {
     currentNotify.value = null
     petState.value = 'idle'
     return
   }
-  const item = notifyQueue.shift()!
   showNotify(item)
 }
 
 function enqueueNotify(payload: { text?: string; action?: string; duration?: number }): void {
-  const text = payload?.text ?? ''
-  if (!text) return
-  const item: NotifyItem = {
-    id: ++notifySeq,
-    text,
-    action: payload?.action,
-    duration: payload?.duration,
-  }
-  notifyQueue.push(item)
+  // 空文本不入队（model 层返回 null）；notifySeq 自增也一并下沉，避免两处维护。
+  const item = notifyQueue.enqueue(payload)
+  if (!item) return
   // 若指定了动作，先播该动作（优先级最高）；动作播完后再显示气泡，
   // 否则 showNotify 会立即把 petState 切成 'talk'，覆盖动作动画导致"选了动作没生效"。
-  if (item.action && item.action !== 'talk') {
-    playAction(item.action, undefined, () => {
+  if (shouldPlayActionFirst(item)) {
+    playAction(item.action as string, undefined, () => {
       if (!currentNotify.value) showNextNotify()
     })
   } else if (!currentNotify.value) {
@@ -225,76 +215,42 @@ function onBubbleAfterLeave(): void {
   reportInteractiveRects()
 }
 
+/** DOMRect → 纯数据矩形（model 层不依赖 DOM 类型，便于单测）。 */
+function toMeasured(r: DOMRect): MeasuredRect {
+  return { left: r.left, top: r.top, width: r.width, height: r.height }
+}
+
 function reportInteractiveRects(): void {
   if (!isTauri) return
-  const rects: Array<[number, number, number, number]> = []
   const scale = petStore.scale
 
-  // box-shadow / filter:drop-shadow 都是纯视觉效果，不参与布局、
-  // 不撑大元素 border-box，getBoundingClientRect() 完全不包含它们溢出的部分。
-  // 这部分溢出像素若不算进上报矩形，会被 Windows 的 SetWindowRgn 直接裁掉
-  // （阴影缺角/断层，甚至连带裁到边缘箭头/轮廓）。故给矩形四周统一外扩，
-  // 覆盖「偏移 + 模糊半径」的最大视觉范围，外加冗余。
-  //
-  // .bubble 阴影: 0 6px 18px（下方最大约 6+18=24px）与 0 2px 6px（下方约 8px），
-  //   取较大值 24px 做基准；箭头额外溢出 9px 已被这圈阴影外扩覆盖，无需单独补。
-  // .pet-stage 的 drop-shadow(0 4px 8px)：下方最大约 4+8=12px，同样四周外扩。
-  // 四向都外扩，避免只补下方而漏掉阴影模糊在左右/上方的少量扩散。
-  // 阴影/模糊核实际扩散范围比 CSS 理论值更大，保守放宽避免 region 把阴影硬裁掉。
-  // region 大一点只是多了少量可交互区域，不会裁掉视觉；裁小了才会露馅。
-  const bubbleShadowPad = 28 * scale
-  const petShadowPad = 16 * scale
+  // 矩形需要按 scale 外扩一圈以覆盖 box-shadow / drop-shadow 的溢出像素
+  // （阴影不参与布局、不撑大 border-box，getBoundingClientRect 完全不含它）。
+  // 不扩会被 Windows 的 SetWindowRgn 直接裁掉，表现为阴影缺角/断层。
+  // 外扩基准值（气泡 28 / 宠物 16，均 ×scale）见 features/pet/model/geometry.ts。
 
   // 优先用当前挂载的气泡 ref；ref 已解绑（正在离场动画中）时，
   // 退回 onBubbleLeave 缓存的最后一次完整矩形，避免动画播放期间
   // 矩形提前消失导致气泡被硬裁切。
   const liveBubble = bubbleEl.value?.getBoundingClientRect() ?? null
   const bubbleRect =
-    liveBubble && liveBubble.width > 0 && liveBubble.height > 0
-      ? liveBubble
-      : leavingBubbleRect
-        ? {
-            left: leavingBubbleRect.left,
-            top: leavingBubbleRect.top,
-            width: leavingBubbleRect.width,
-            height: leavingBubbleRect.height,
-          }
-        : null
+    liveBubble && liveBubble.width > 0 && liveBubble.height > 0 ? toMeasured(liveBubble) : null
+  const bubble = bubbleRect ?? leavingBubbleRect
 
-  if (bubbleRect) {
-    rects.push([
-      bubbleRect.left - bubbleShadowPad,
-      bubbleRect.top - bubbleShadowPad,
-      bubbleRect.width + bubbleShadowPad * 2,
-      bubbleRect.height + bubbleShadowPad * 2,
-    ])
-  }
-  let hasPetRect = false
+  // 关键守卫：宠物必须真正加载完（currentPet 就绪）才把宠物区算进可交互矩形。
+  // 仅 petStageEl 有尺寸不够——容器即使宠物图未加载完也可能有布局尺寸，
+  // 此时算进宠物 rect 会得到「空白/旧图」的错位置。
   const p = petStageEl.value
-  // 关键守卫:宠物必须真正加载完(currentPet 就绪)才把宠物区算进可交互矩形。
-  // 仅 petStageEl 有尺寸不够——容器即使宠物图未加载完也可能有布局尺寸,
-  // 此时若算进宠物 rect 会得到「空白/旧图」的错位置;若不算则只有气泡 rect,
-  // 会触发下方「上报空数组」分支,统一保持整窗可交互。
+  let pet: MeasuredRect | null = null
   if (p && currentPet.value) {
     const r = p.getBoundingClientRect()
-    if (r.width > 0 && r.height > 0) {
-      hasPetRect = true
-      rects.push([
-        r.left - petShadowPad,
-        r.top - petShadowPad,
-        r.width + petShadowPad * 2,
-        r.height + petShadowPad * 2,
-      ])
-    }
+    if (r.width > 0 && r.height > 0) pet = toMeasured(r)
   }
-  // 宠物未就绪时,若 rects 里只有气泡(没有宠物),不要上报这个残缺矩形——
-  // Windows 的 SetWindowRgn 会用它把整个宠物区域裁掉(鼠标穿透、点不动),
-  // 表现为启动「偶尔异常」(取决于宠物清单加载快慢的竞态)。此时直接上报空数组,
-  // 保持整窗可交互,等 currentPet 就绪后由 watch 触发重新上报真实矩形。
-  if (!hasPetRect && rects.length > 0) {
-    void updateInteractiveRects([])
-    return
-  }
+
+  // 纯计算下沉到 model：含「宠物未就绪却只有气泡矩形 → 上报空数组保持整窗
+  // 可交互」的守卫，避免 Windows 用残缺矩形把整个宠物区裁掉（启动竞态偶发点不动）。
+  const { rects, hasPetRect } = computeHitRects({ bubble, pet, scale })
+
   // 统一上报可交互矩形（macOS/Windows 同一入口；Linux 目前 no-op）。
   // 旧命令 set_pet_hit_rects 已废弃，统一走 update_interactive_rects；
   // apply_pet_hit_rects 仅 Windows 显式生效 SetWindowRgn 时需要。
@@ -319,9 +275,10 @@ function reportInteractiveRects(): void {
 //
 // 注意：兜底时长必须 < 气泡淡出动画时长（.bubble-leave-active 为 0.22s = 220ms）。
 // 气泡消失时节点会被 v-if 销毁，::after 箭头不会单独派发 transitionend，
-// 唯一能纠正「含气泡+箭头」命中矩形的就是该兜底定时器。若兜底(340ms)大于淡出(220ms)，
-// 会出现「本体先淡没、箭头因命中矩形仍包含它而晚消失 ~120ms」的错位（Windows 硬边
-// SetWindowRgn 下尤其明显）。故兜底取 200ms，确保权威纠正早于淡出完成，二者同步消失。
+// 唯一能纠正「含气泡+箭头」命中矩形的就是该兜底定时器。若兜底大于淡出时长，
+// 会出现「本体先淡没、箭头因命中矩形仍包含它而晚消失」的错位（Windows 硬边
+// SetWindowRgn 下尤其明显）。故取 BUBBLE.SETTLE_MS = 200ms，确保权威纠正早于
+// 淡出完成，二者同步消失。
 let settleTimer: ReturnType<typeof setTimeout> | null = null
 
 async function reportInteractiveRectsSettled(): Promise<void> {
@@ -333,7 +290,7 @@ async function reportInteractiveRectsSettled(): Promise<void> {
   await nextTick()
   reportInteractiveRects()
   if (settleTimer) clearTimeout(settleTimer)
-  settleTimer = setTimeout(reportInteractiveRects, 200)
+  settleTimer = setTimeout(reportInteractiveRects, BUBBLE.SETTLE_MS)
 }
 
 function onBubbleTransitionEnd(e: TransitionEvent): void {
@@ -356,8 +313,7 @@ function onBubbleTransitionEnd(e: TransitionEvent): void {
 //    不再依赖固定时间，只要移动够了立刻生效，跟操作快慢无关。
 // 3. 阈值判断从「时间够不够」换成「位移够不够」（DRAG_DIRECTION_THRESHOLD_PX），
 //    避免手抖/误触在原地被误判为拖拽。
-const DRAG_DIRECTION_THRESHOLD_PX = 6
-
+// 拖拽位移阈值统一取 shared/config/constants.ts 的 DRAG.THRESHOLD_PX（6px）。
 let dragging = false
 let dragMoved = false // 本次按下是否真的产生了拖拽位移（用于区分单击/拖拽）
 let dragStartX = 0
@@ -368,13 +324,15 @@ let dragStartedOs = false // 是否已经调用过系统级 startDragging（只�
 // 改用窗口 Moved 事件 debounce 兜底（窗口停止移动 ~180ms 即认为拖拽结束），即使
 // mouseup 收不到也能恢复 dragging=false，避免下一次单击被 if(dragMoved) return 误吞。
 let dragMovedTimer: ReturnType<typeof setTimeout> | null = null
+// 拖拽「松手后紧跟的 click」抑制窗口。
+let clickGuardTimer: ReturnType<typeof setTimeout> | null = null
 let unlistenWindowMoved: (() => void) | null = null
 
 function onPetMouseDown(e: MouseEvent): void {
   // macOS：拖拽移动由原生层（NSTimer + setFrameOrigin）全权驱动，点击/双击由
   // @click/@dblclick 处理。这里不注册 mousemove/mouseup 监听、也不调用 startDragging，
   // 避免与原生拖拽抢移动造成抖动。
-  if (isMac) return
+  if (isMac.value) return
   // 双击兜底：Windows 上 startDragging 会吞掉 dblclick，这里用 mousedown 的 detail 直接拦截
   if (e.detail === 2) {
     openPetPicker()
@@ -406,7 +364,7 @@ function onPetDragMove(e: MouseEvent): void {
   const dy = e.clientY - dragStartY
 
   // 位移未达阈值：可能是手抖或即将单击，先不判定、也不启动系统拖拽
-  if (Math.abs(dx) < DRAG_DIRECTION_THRESHOLD_PX && Math.abs(dy) < DRAG_DIRECTION_THRESHOLD_PX) {
+  if (Math.abs(dx) < DRAG.THRESHOLD_PX && Math.abs(dy) < DRAG.THRESHOLD_PX) {
     return
   }
 
@@ -425,21 +383,34 @@ function onPetDragMove(e: MouseEvent): void {
 
   // 启动系统级窗口拖拽（只调一次）。调用后 OS 接管移动，webview 的 mousemove 在
   // Windows 上可能不再派发——但方向已经在上面预判好了，不影响跑步动作展示。
+  //
+  // 注意：这里【不再】注册 onWindowMoved。原实现每次拖拽都在异步 then 里挂一个
+  // 新监听，且 `onWindowMoved(...).then(un => unlistenWindowMoved = un)` 与
+  // stopDragging() 存在竞态——若拖拽先结束，unlistenWindowMoved 此刻仍是 null，
+  // 取消不掉；等 promise resolve 后才把 un 赋上去，该监听从此无人取消，
+  // 多次拖拽会累积多个回调。现改为在 onMounted 里注册一次，用 dragging 标志位控
+  // 制是否响应（见 onWindowDragMoved）。
   if (!dragStartedOs) {
     dragStartedOs = true
-    // 注册窗口 Moved 兜底：系统拖拽期间窗口会高频触发 Moved，停手后约 180ms 不再移动
-    // 即判定拖拽结束（Windows 上 mouseup 可能被 OS 吞掉，必须靠这个兜底恢复状态）。
-    void onWindowMoved(() => {
-      if (dragMovedTimer) clearTimeout(dragMovedTimer)
-      dragMovedTimer = setTimeout(() => {
-        dragMovedTimer = null
-        if (dragging) stopDragging()
-      }, 180)
-    }).then((un) => {
-      unlistenWindowMoved = un
-    })
     void startDragging()
   }
+}
+
+/**
+ * 窗口移动兜底：系统拖拽期间窗口会高频触发 Moved，停手后约 180ms 不再移动
+ * 即判定拖拽结束。Windows 上 mouseup 常被 OS 吞掉，必须靠这个兜底恢复状态，
+ * 否则 dragging 卡 true，下一次单击会被 `if (dragMoved) return` 误吞。
+ */
+function onWindowDragMoved(): void {
+  // macOS 由原生层（macos_pet.rs 的 NSTimer）全权驱动拖拽，drag-end 由
+  // pet-drag-end 事件通知。若这里提前 stopDragging()，dragging 会被置 false，
+  // 导致 onNativeDragEnd 的 `if (!dragging) return` 提前返回 → 跑步动作卡住不回 idle。
+  if (isMac.value || !dragging) return
+  if (dragMovedTimer) clearTimeout(dragMovedTimer)
+  dragMovedTimer = setTimeout(() => {
+    dragMovedTimer = null
+    if (dragging) stopDragging()
+  }, DRAG.MOVED_DEBOUNCE_MS)
 }
 
 // macOS 原生拖拽结束（Rust NSTimer 检测到松开左键后 emit pet-drag-end 触发）。
@@ -449,15 +420,19 @@ function onNativeDragEnd(): void {
   dragging = false
   // 拖拽松手后会紧跟一个 click 事件，需在其到达前保持 dragMoved=true 以忽略它；
   // 留 80ms 延迟再复位，避免拖拽松手被误判成单击触发随机动作。
-  setTimeout(() => {
+  // 句柄需保留：组件若在窗口期内卸载，裸 setTimeout 仍会触碰已销毁的状态。
+  if (clickGuardTimer) clearTimeout(clickGuardTimer)
+  clickGuardTimer = setTimeout(() => {
+    clickGuardTimer = null
     dragMoved = false
-  }, 80)
+  }, DRAG.CLICK_GUARD_MS)
   if (petState.value === 'runningLeft' || petState.value === 'runningRight') {
     petState.value = 'idle'
     scheduleRandomAction()
   }
 }
 
+/** 结束一次拖拽并复位状态（Windows mouseup / Moved 兜底 / macOS 原生 drag-end 共用）。 */
 function stopDragging(): void {
   if (!dragging) return
   dragging = false
@@ -465,14 +440,11 @@ function stopDragging(): void {
   dragDirLocked = false
   window.removeEventListener('mousemove', onPetDragMove)
   window.removeEventListener('mouseup', onGlobalMouseUp)
-  // 清理 Windows 系统拖拽兜底监听与 timer（避免 mouseup 被吞时的残留触发）
+  // 清理 Windows 系统拖拽兜底 timer（避免 mouseup 被吞时的残留触发）。
+  // onWindowMoved 监听是全局常驻的（onMounted 注册一次），不在此处取消。
   if (dragMovedTimer) {
     clearTimeout(dragMovedTimer)
     dragMovedTimer = null
-  }
-  if (unlistenWindowMoved) {
-    unlistenWindowMoved()
-    unlistenWindowMoved = null
   }
   if (wasDirLocked) {
     if (petState.value === 'runningLeft' || petState.value === 'runningRight') {
@@ -524,7 +496,7 @@ watch(
 //
 // 修复：原来这里是 setTimeout(reportInteractiveRects, 0)，正好落在气泡入场动画
 // 刚起步的那一帧，测到的是动画中间态矩形。改用 reportInteractiveRectsSettled，
-// 立即做一次粗略上报保交互，动画真正结束后（transitionend 或 340ms 兜底）
+// 立即做一次粗略上报保交互，动画真正结束后（transitionend 或 BUBBLE.SETTLE_MS 兜底）
 // 再做一次权威上报去纠正。
 watch(
   () => [
@@ -632,10 +604,20 @@ function onContextMenu(e: Event): void {
 
 onMounted(async () => {
   scheduleRandomAction()
+  // Windows 系统拖拽兜底监听：整个组件生命周期【只注册一次】。
+  // 必须在所有 await 之前注册：onWindowMoved 是异步的，若等下面的 nextTick /
+  // resize 之后再注册，快速拖拽时监听可能尚未就绪，兜底失效。
+  //
+  // 这里不按平台过滤：注册时机早于 initPlatform 完成（子组件 onMounted 先于
+  // 父组件），平台判断改在回调里用 computed 的 isMac 做，macOS 上回调直接 return。
+  if (isTauri) {
+    unlistenWindowMoved = await onWindowMoved(onWindowDragMoved)
+  }
   // 尽早上报可交互矩形：macOS 穿透用 NSTimer 每 50ms 轮询一次，若矩形未及时上报，
   // 启动瞬间会被误判「鼠标不在宠物上」→ ignoresMouseEvents=true → 穿透。
-  // reportInteractiveRectsSettled 内部会立即上报一次、并在 340ms 后再校正一次，
-  // 足以覆盖首次挂载时的初始渲染 + 首次动画的时间窗口，不需要再手动加多档重试。
+  // reportInteractiveRectsSettled 内部会立即上报一次、并在 BUBBLE.SETTLE_MS
+  // 后再校正一次，足以覆盖首次挂载时的初始渲染 + 首次动画的时间窗口，
+  // 不需要再手动加多档重试。
   await nextTick()
   void reportInteractiveRectsSettled()
   // 禁用右键菜单（透明无边框窗口，避免弹出 webview 默认菜单）
@@ -652,7 +634,11 @@ onUnmounted(() => {
   if (chatTimer) clearTimeout(chatTimer)
   if (settleTimer) clearTimeout(settleTimer)
   if (dragMovedTimer) clearTimeout(dragMovedTimer)
-  if (unlistenWindowMoved) unlistenWindowMoved()
+  if (clickGuardTimer) clearTimeout(clickGuardTimer)
+  if (unlistenWindowMoved) {
+    unlistenWindowMoved()
+    unlistenWindowMoved = null
+  }
   document.removeEventListener('contextmenu', onContextMenu)
   window.removeEventListener('mouseup', onGlobalMouseUp)
   window.removeEventListener('mousemove', onPetDragMove)
