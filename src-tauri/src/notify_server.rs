@@ -155,10 +155,11 @@ pub fn start(app: tauri::AppHandle) {
                 let app = app.clone();
                 // 同样用 Builder：线程创建失败时必须手动回退计数，
                 // 否则 ACTIVE_CONNECTIONS 泄漏 → 后续所有连接被拒。
-                if let Err(_) = std::thread::Builder::new().spawn(move || {
+                let spawned = std::thread::Builder::new().spawn(move || {
                     let _guard = ConnectionGuard;
                     let _ = handle(&mut stream, &app);
-                }) {
+                });
+                if spawned.is_err() {
                     eprintln!("[notify-server] 创建工作线程失败，回退连接计数");
                     ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
                 }

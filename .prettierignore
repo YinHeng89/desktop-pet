@@ -18,3 +18,6 @@ package-lock.json
 
 # ts-rs 生成物（Phase 9 契约测试引入）
 src/bindings
+
+# 本地 agent 记忆 / 工作数据，非项目源码，不参与 prettier 格式化
+.workbuddy
