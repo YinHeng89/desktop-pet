@@ -37,7 +37,8 @@ static INTERACTIVE_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
 
 // 前端上报新交互矩形后置 true,强制下一次 tick 重算穿透(即使鼠标/窗口未动)。
-// 跨平台:store_interactive_rects(mac/win 都编译)与 tick(mac-only)共用。
+// 仅 macOS tick(mac-only)使用,故加 cfg 守卫;非 macOS 编译期不引入死代码。
+#[cfg(target_os = "macos")]
 static RECTS_DIRTY: Mutex<bool> = Mutex::new(true);
 
 // ── 性能优化缓存(macOS-only,tick 用) ──
@@ -57,6 +58,9 @@ static LAST_FRAME_ORIGIN: Mutex<NSPoint> = Mutex::new(NSPoint {
 });
 
 /// 内部：存储可交互矩形（供跨平台统一命令 update_interactive_rects 调用）。
+/// 仅 macOS 分支被 interactive.rs 的 #[cfg(target_os = "macos")] 调用方引用,
+/// 故加 cfg 守卫;Windows/Linux 编译期不引入死代码。
+#[cfg(target_os = "macos")]
 pub(crate) fn store_interactive_rects(rects: &[Rect]) {
     let non_empty = !rects.is_empty();
     if let Ok(mut g) = INTERACTIVE_RECTS.lock() {
