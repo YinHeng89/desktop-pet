@@ -21,16 +21,22 @@
 // (前提是窗口声明了 Per-Monitor V2 DPI 感知,Tauri 默认会声明)。
 // GetDeviceCaps 保留作为 GetDpiForWindow 返回 0 时的兜底路径。
 
+// 仅 Windows 平台使用(被下方两个 static 与 store_hit_rects 引用),
+// 加 cfg 守卫避免 macOS/Linux 编译期 dead_code 告警。
+#[cfg(target_os = "windows")]
 use std::sync::Mutex;
 
 // Manager 特性提供 app.get_webview_window(...),在所有平台都需要
 use tauri::Manager;
 
 // 可交互矩形(CSS 逻辑像素,相对窗口内容区/视口左上角):(x, y, w, h)
-// 复用跨平台共享类型,保证与 macOS 端语义一致。
+// 复用跨平台共享类型,保证与 macOS 端语义一致。仅 Windows 平台使用。
+#[cfg(target_os = "windows")]
 use crate::domain::geometry::Rect;
+#[cfg(target_os = "windows")]
 static HIT_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 // 是否已初始化(前端上报过矩形)。未初始化时保持整窗可交互。
+#[cfg(target_os = "windows")]
 static RECTS_INITIALIZED: Mutex<bool> = Mutex::new(false);
 
 #[cfg(target_os = "windows")]
@@ -39,6 +45,8 @@ const WINDOW_CORNER_RADIUS: i32 = 14; // 与气泡/设置窗圆角一致
 const LOGPIXELSX: i32 = 88; // GDI 常量:每逻辑英寸像素数(X 方向),仅兜底路径用
 
 /// 内部:存储可交互矩形(供跨平台统一命令 update_interactive_rects 调用)。
+/// 仅 Windows 平台实际生效(调用方 interactive.rs 已在 #[cfg(windows)] 下分派)。
+#[cfg(target_os = "windows")]
 pub(crate) fn store_hit_rects(rects: &[Rect]) {
     let non_empty = !rects.is_empty();
     if let Ok(mut g) = HIT_RECTS.lock() {
